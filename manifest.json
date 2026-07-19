@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "B 站 AI 广告跳过",
+  "version": "1.0.0",
+  "description": "通过视频字幕识别并自动跳过 B 站视频中的广告片段。",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://api.bilibili.com/*",
+    "https://www.bilibili.com/*",
+    "https://*.hdslb.com/*",
+    "https://openrouter.ai/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.bilibili.com/video/*", "https://www.bilibili.com/bangumi/play/*"],
+      "js": ["content.js"],
+      "css": ["panel.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html"
+}
