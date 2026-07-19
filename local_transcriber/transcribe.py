@@ -81,6 +81,9 @@ class Transcriber:
         return result
 
     def _transcribe(self, model, wav_path: Path, language: str, updates: queue.Queue) -> list[dict]:
+        from opencc import OpenCC
+
+        converter = OpenCC("t2s")
         segments, _info = model.transcribe(
             str(wav_path),
             language=language or None,
@@ -90,7 +93,7 @@ class Transcriber:
         )
         result = []
         for segment in segments:
-            text = " ".join(segment.text.split())
+            text = converter.convert(" ".join(segment.text.split()))
             if text and segment.end > segment.start:
                 result.append({"start": round(float(segment.start), 3), "end": round(float(segment.end), 3), "text": text})
             updates.put(float(segment.end))

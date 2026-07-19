@@ -19,12 +19,19 @@ Manifest V3 Chrome 扩展：从 B 站视频已有字幕中识别广告/推广时
 
 需要 Python 3.10+、可执行的 FFmpeg，以及支持 CUDA 的 NVIDIA 驱动。默认使用 CUDA/FP16；首次使用 faster-whisper 可能需要下载模型。若需强制使用 CPU，可设置 `BILI_TRANSCRIBER_DEVICE=cpu BILI_TRANSCRIBER_COMPUTE_TYPE=int8`。
 
+首次配置时执行：
+
 ```bash
 cd local_transcriber
 python -m venv .venv
 .venv\\Scripts\\activate
 pip install -r requirements.txt
-python -m uvicorn local_transcriber.app:app --app-dir .. --host 127.0.0.1 --port 8765
+```
+
+以后直接双击项目根目录的 `启动本机语音识别.bat` 即可启动服务。也可以在项目根目录执行：
+
+```bash
+local_transcriber\\.venv\\Scripts\\python.exe -m uvicorn local_transcriber.app:app --app-dir . --host 127.0.0.1 --port 8765
 ```
 
 服务只监听本机 `127.0.0.1`，不会保存原始音频。默认模型为 `small`、`beam_size=1`、CUDA 设备索引为 `0`；可通过环境变量 `BILI_TRANSCRIBER_MODEL`、`BILI_TRANSCRIBER_BEAM_SIZE`、`BILI_TRANSCRIBER_DEVICE_INDEX`、`BILI_TRANSCRIBER_NUM_WORKERS` 和 `BILI_TRANSCRIBER_CPU_THREADS` 调整。若没有启动服务，扩展会在确认后显示失败原因。VAD 默认过滤超过 500 毫秒的静音，并保留 200 毫秒语音边界。
