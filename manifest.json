@@ -8,7 +8,8 @@
     "https://api.bilibili.com/*",
     "https://www.bilibili.com/*",
     "https://*.hdslb.com/*",
-    "https://openrouter.ai/*"
+    "https://openrouter.ai/*",
+    "http://127.0.0.1:8765/*"
   ],
   "background": {
     "service_worker": "background.js",

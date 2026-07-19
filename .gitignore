@@ -1,10 +1,26 @@
-# 参考二进制扩展包
-BiliBili 字幕提取器 2.3.0.crx
-
 # Node.js
 node_modules/
 coverage/
 .nyc_output/
+
+# Python 缓存、本地环境与构建产物
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.coverage
+htmlcov/
+
+# Claude Code 临时工作树与本地配置
+.claude/worktrees/
+.claude/settings.local.json
+.claude/*.local.*
 
 # 日志
 *.log
@@ -12,6 +28,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+local_transcriber/logs/
 
 # 本地环境与密钥
 .env
@@ -21,9 +38,38 @@ pnpm-debug.log*
 # 编辑器与系统文件
 .vscode/
 .idea/
+*.swp
+*.swo
 .DS_Store
 Thumbs.db
+desktop.ini
+~$*
 
-# Chrome 扩展打包产物
+# Chrome 扩展发布包
 *.zip
 *.crx
+
+# 本地语音识别环境、模型与临时音频
+local_transcriber/.venv/
+local_transcriber/models/
+local_transcriber/tmp/
+local_transcriber/temp/
+local_transcriber/*.wav
+local_transcriber/*.mp3
+local_transcriber/*.m4a
+local_transcriber/*.webm
+
+# 其他本地缓存与临时文件
+.cache/
+.cache-*/
+.local/
+*.tmp
+*.temp
+
+# 保留项目依赖与示例配置
+!local_transcriber/requirements.txt
+!*.example
+!*.sample
+
+# 非仓库内容：源码、测试与 README.md 不应被忽略
+# 如需提交发布包，请使用 git add -f <文件>

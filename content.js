@@ -4,8 +4,27 @@
   let toastTimer = null;
   let currentBvid = null;
   const PANEL_LAYOUT_KEY = "panelLayout";
-  let state = { subtitle: "等待视频", analysis: "未开始", model: "读取中", progress: 0, progressLabel: "", progressState: "idle", segments: [], debug: null, autoSkip: true };
+  let state = { subtitle: "等待视频", analysis: "未开始", model: "读取中", progress: 0, progressLabel: "", progressState: "idle", transcription: null, segments: [], debug: null, autoSkip: true, localPrompt: false };
+  let localRequestId = null;
   let skipped = new Set();
+
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.type !== "LOCAL_TRANSCRIPTION_PROGRESS" || message.requestId !== localRequestId) return;
+    if (message.status === "completed") {
+      state = { ...state, transcription: null, subtitle: "字幕生成完成", analysis: "分析中", progress: 70, progressLabel: "正在等待模型分析", progressState: "active" };
+    } else {
+      state = {
+        ...state,
+        subtitle: message.status === "downloading" ? "获取音频中" : "本机识别中",
+        analysis: message.message || "本机识别中",
+        progress: Math.max(20, Math.min(69, message.progress || 0)),
+        progressLabel: message.message || "正在本机识别",
+        progressState: "active",
+        transcription: message.transcription
+      };
+    }
+    render();
+  });
   let lastJumpAt = 0;
 
   function getVideoIdentity() {
@@ -31,6 +50,11 @@
     return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
   }
 
+  function formatEta(seconds) {
+    if (seconds == null || !Number.isFinite(seconds)) return "计算中";
+    return seconds < 1 ? "即将完成" : `约 ${format(seconds)}`;
+  }
+
   function formatDebug(value, emptyText) {
     if (!value) return emptyText;
     try {
@@ -47,7 +71,9 @@
       <div class="bili-ai-title" id="bili-ai-drag-handle"><span class="bili-ai-title-icon">AI</span><span class="bili-ai-title-copy"><b>AI 广告跳过</b><small>智能识别 · 自动略过</small></span><span class="bili-ai-drag-hint">拖动</span></div>
       <div class="bili-ai-status"><span>字幕</span><strong>${state.subtitle}</strong></div>
       <div class="bili-ai-status"><span>AI</span><strong>${state.analysis}</strong></div>
-      ${state.progressState !== "idle" ? `<div class="bili-ai-progress" role="progressbar" aria-label="分析进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${state.progress}"><div class="bili-ai-progress-track"><i class="bili-ai-progress-fill bili-ai-progress-${state.progressState}" style="width:${state.progress}%"></i></div><small>${state.progressLabel} · ${state.progress}%</small></div>` : ""}
+      ${state.progressState !== "idle" ? `<div class="bili-ai-progress" role="progressbar" aria-label="总流程进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${state.progress}"><div class="bili-ai-progress-track"><i class="bili-ai-progress-fill bili-ai-progress-${state.progressState}" style="width:${state.progress}%"></i></div><small>总流程：${state.progressLabel} · ${state.progress}%</small></div>` : ""}
+      ${state.transcription ? `<section class="bili-ai-transcription" aria-live="polite"><div class="bili-ai-transcription-heading"><b>语音转文本</b><span>${state.transcription.progress == null ? "处理中" : `${state.transcription.progress.toFixed(1)}%`}</span></div><div class="bili-ai-progress-track"><i class="bili-ai-progress-fill bili-ai-progress-active" style="width:${Math.min(100, state.transcription.progress || 0)}%"></i></div><small>已处理 ${format(state.transcription.seconds)}${state.transcription.duration ? ` / ${format(state.transcription.duration)}` : ""} · 剩余时间：${formatEta(state.transcription.eta)}</small></section>` : ""}
+      ${state.localPrompt ? `<section class="bili-ai-local-prompt" aria-live="polite"><b>当前视频没有可用字幕</b><p>是否允许在本机使用语音识别？音频仅发送到本机服务；识别后的字幕仍会发送给你配置的 OpenRouter。</p><div><button id="bili-ai-local-confirm">仅本次识别</button><button id="bili-ai-local-cancel">取消</button></div></section>` : ""}
       <div class="bili-ai-status"><span>模型</span><strong class="bili-ai-model">${escapeHtml(state.model)}</strong></div>
       <label class="bili-ai-toggle"><input id="bili-ai-auto" type="checkbox" ${state.autoSkip ? "checked" : ""}> 自动跳过</label>
       <div class="bili-ai-actions"><button id="bili-ai-retry">重新分析</button><button id="bili-ai-debug">调试信息</button></div>
@@ -60,6 +86,11 @@
 
     panel.querySelector("#bili-ai-auto").addEventListener("change", (event) => { state.autoSkip = event.target.checked; });
     panel.querySelector("#bili-ai-retry").addEventListener("click", () => startAnalysis(true));
+    panel.querySelector("#bili-ai-local-confirm")?.addEventListener("click", () => runLocalTranscription());
+    panel.querySelector("#bili-ai-local-cancel")?.addEventListener("click", () => {
+      state = { ...state, localPrompt: false, analysis: "已取消本次本机识别", progressState: "failed", progressLabel: "流程已取消" };
+      render();
+    });
     panel.querySelector("#bili-ai-debug").addEventListener("click", () => {
       const view = panel.querySelector("#bili-ai-debug-view");
       view.hidden = !view.hidden;
@@ -158,6 +189,49 @@
     restorePanelLayout(panel);
   }
 
+  async function runLocalTranscription(force = false) {
+    const identity = getVideoIdentity();
+    const requestId = crypto.randomUUID();
+    localRequestId = requestId;
+    const video = document.querySelector("video");
+    state = { ...state, localPrompt: false, subtitle: "获取音频中", analysis: "本机识别中", progress: 20, progressLabel: "正在提交本机识别任务", progressState: "active", debug: null };
+    render();
+    const isSupportedAudioUrl = (value) => {
+      try {
+        const url = new URL(value);
+        const host = url.hostname.toLowerCase().replace(/\.$/, "");
+        return url.protocol === "https:" && /-(?:30216|30232|30250|30251|30280)\.m4s$/i.test(url.pathname) && (host.endsWith(".hdslb.com") || host.endsWith(".bilivideo.cn") || host.endsWith(".bilivideo.com") || host === "bilivideo.com" || host.endsWith(".edge.mountaintoys.cn"));
+      } catch {
+        return false;
+      }
+    };
+    const source = video?.currentSrc || video?.src || "";
+    const audioUrls = [...new Set([
+      ...(isSupportedAudioUrl(source) ? [source] : []),
+      ...performance.getEntriesByType("resource").map((entry) => entry.name).filter(isSupportedAudioUrl)
+    ])].sort((left, right) => {
+      const score = (value) => /-(?:30216|30232|30280)\.m4s(?:\?|$)/i.test(value) ? 2 : /-\d+\.m4s(?:\?|$)/i.test(value) ? 1 : 0;
+      return score(right) - score(left);
+    });
+    if (!audioUrls.length) {
+      state = { ...state, subtitle: "音频获取失败", analysis: "未找到独立音频流", progress: 20, progressLabel: "请播放片刻后重试", progressState: "failed" };
+      render();
+      return;
+    }
+    const result = await send({ type: "TRANSCRIBE_LOCAL", requestId, identity, audioUrls, duration: video?.duration });
+    if (currentBvid !== identity.key) return;
+    if (result.status !== "ready" || !result.timeline) {
+      state = { ...state, subtitle: "本机识别失败", analysis: result.error || "无法生成字幕", progress: 20, progressLabel: "流程未完成", progressState: "failed" };
+      render();
+      return;
+    }
+    state = { ...state, transcription: null, subtitle: "已获取（本机语音识别）", analysis: "分析中", progress: 70, progressLabel: "正在等待模型分析", progressState: "active" };
+    render();
+    const analyzed = await send({ type: "ANALYZE", bvid: identity.bvid || `aid-${identity.aid}`, cacheKey: `${identity.key}:local`, timeline: result.timeline, duration: video?.duration, force: true });
+    state = { ...state, analysis: analyzed.status === "completed" ? `已完成（${analyzed.segments.length} 段）` : analyzed.error || "分析失败", progress: analyzed.status === "completed" ? 100 : 90, progressLabel: analyzed.status === "completed" ? "分析完成" : "流程未完成", progressState: analyzed.status === "completed" ? "completed" : "failed", segments: analyzed.segments || [], debug: { request: analyzed.requestDebug || "", response: analyzed.responseDebug || "" } };
+    render();
+  }
+
   async function startAnalysis(force = false) {
     const identity = getVideoIdentity();
     if (!identity.key) return;
@@ -170,7 +244,11 @@
     const subtitles = await send({ type: "FETCH_SUBTITLES", ...identity });
     if (currentBvid !== key) return;
     if (subtitles.status !== "ready") {
-      state = { ...state, subtitle: subtitles.status === "no-subtitles" ? "没有可用字幕" : "获取失败", analysis: subtitles.error || "无法分析", progressLabel: "流程未完成", progressState: "failed", debug: { subtitle: subtitles.debug || subtitles.error || "" } };
+      if (subtitles.status === "no-subtitles") {
+        state = { ...state, subtitle: "没有可用字幕", analysis: "等待选择本机识别", progress: 20, progressLabel: "请确认是否使用本机语音识别", progressState: "active", localPrompt: true, debug: { subtitle: subtitles.debug || "" } };
+      } else {
+        state = { ...state, subtitle: "获取失败", analysis: subtitles.error || "无法分析", progressLabel: "流程未完成", progressState: "failed", debug: { subtitle: subtitles.debug || subtitles.error || "" } };
+      }
       render();
       return;
     }

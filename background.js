@@ -3,9 +3,86 @@ import { extractJson, normalizeSegments } from "./lib/segments.js";
 
 const DEFAULT_PROMPT = `你是视频内容审核助手。根据带时间戳的字幕，识别明确的商业广告、品牌推广、带货、课程/社群/产品引流片段。不要把普通内容、口播开场、创作者自我介绍误判为广告；不确定时不要输出。仅返回 JSON，格式为 {"segments":[{"start":12.3,"end":45.6,"reason":"简短原因"}]}，start/end 必须是秒数。`;
 
+const LOCAL_TRANSCRIBER_URL = "http://127.0.0.1:8765";
+const LOCAL_REQUEST_TIMEOUT = 10000;
+const LOCAL_STATUS_TIMEOUT = 10000;
+const LOCAL_TOTAL_TIMEOUT = 15 * 60 * 1000;
+const LOCAL_POLL_INTERVAL = 1200;
+
 function apiUrl(path) {
   return path.startsWith("//") ? `https:${path}` : path;
 }
+
+async function fetchLocal(path, options = {}, timeout = LOCAL_REQUEST_TIMEOUT) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    return await fetch(`${LOCAL_TRANSCRIBER_URL}${path}`, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function localError(error, fallback) {
+  return error.name === "AbortError" ? "本机识别服务请求超时，请检查服务状态或重试。" : error.message || fallback;
+}
+
+async function transcribeLocally({ requestId, identity, audioUrls, duration }, tabId) {
+  const reportProgress = (job) => {
+    if (tabId == null) return;
+    chrome.tabs.sendMessage(tabId, {
+      type: "LOCAL_TRANSCRIPTION_PROGRESS",
+      requestId,
+      status: job.status,
+      progress: job.progress,
+      message: job.message,
+      transcription: job.transcription || null
+    }).catch(() => {});
+  };
+  const health = await fetchLocal("/v1/health");
+  if (!health.ok) throw new Error(`本机识别服务不可用（${health.status}）。`);
+  const created = await fetchLocal("/v1/transcriptions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ requestId, video: { ...identity, duration }, audio: { urls: audioUrls }, options: { language: "zh" } })
+  });
+  if (!created.ok) throw new Error(`提交本机识别任务失败（${created.status}）。`);
+  const { jobId } = await created.json();
+  const deadline = Date.now() + LOCAL_TOTAL_TIMEOUT;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, LOCAL_POLL_INTERVAL));
+    const response = await fetchLocal(`/v1/transcriptions/${encodeURIComponent(jobId)}`, {}, LOCAL_STATUS_TIMEOUT);
+    if (!response.ok) throw new Error(`查询本机识别任务失败（${response.status}）。`);
+    const job = await response.json();
+    reportProgress(job);
+    if (job.status === "completed") {
+      return {
+        status: "ready",
+        subtitleName: "本机语音识别",
+        timeline: toTimelineText((job.segments || []).map((segment) => ({ from: segment.start, to: segment.end, content: segment.text })))
+      };
+    }
+    if (job.status === "failed" || job.status === "cancelled") throw new Error(job.error || job.message || "本机语音识别失败。");
+  }
+  throw new Error("本机语音识别任务超过 15 分钟仍未完成，请查看服务日志。");
+}
+
+async function cancelLocalTranscription(jobId) {
+  if (!jobId) return;
+  await fetch(`${LOCAL_TRANSCRIBER_URL}/v1/transcriptions/${encodeURIComponent(jobId)}`, { method: "DELETE" }).catch(() => {});
+}
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === "TRANSCRIBE_LOCAL") {
+    const controller = new AbortController();
+    transcribeLocally(message, _sender.tab?.id).then(sendResponse).catch((error) => sendResponse({ status: "failed", error: localError(error, "本机语音识别失败。") }));
+    return true;
+  }
+  if (message.type === "CANCEL_LOCAL_TRANSCRIPTION") {
+    cancelLocalTranscription(message.jobId).then(() => sendResponse({ status: "cancelled" }));
+    return true;
+  }
+});
 
 async function getVideoIdentity({ bvid, aid, cid, pageNumber = 1 }) {
   if (aid && cid) return { aid, cid };
