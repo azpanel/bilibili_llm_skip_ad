@@ -4,8 +4,9 @@
   let toastTimer = null;
   let currentBvid = null;
   const PANEL_LAYOUT_KEY = "panelLayout";
-  let state = { subtitle: "等待视频", analysis: "未开始", model: "读取中", progress: 0, progressLabel: "", progressState: "idle", transcription: null, segments: [], debug: null, autoSkip: true, localPrompt: false };
+  let state = { subtitle: "等待视频", analysis: "未开始", model: "读取中", progress: 0, progressLabel: "", progressState: "idle", transcription: null, segments: [], debug: null, autoSkip: true, localPrompt: false, debugOpen: false };
   let localRequestId = null;
+  let renderedSegmentsKey = null;
   let skipped = new Set();
 
   chrome.runtime.onMessage.addListener((message) => {
@@ -67,40 +68,79 @@
   function render() {
     const panel = document.getElementById(PANEL_ID);
     if (!panel) return;
-    panel.innerHTML = `
-      <div class="bili-ai-title" id="bili-ai-drag-handle"><span class="bili-ai-title-icon">AI</span><span class="bili-ai-title-copy"><b>AI 广告跳过</b><small>智能识别 · 自动略过</small></span><span class="bili-ai-drag-hint">拖动</span></div>
-      <div class="bili-ai-status"><span>字幕</span><strong>${state.subtitle}</strong></div>
-      <div class="bili-ai-status"><span>AI</span><strong>${state.analysis}</strong></div>
-      ${state.progressState !== "idle" ? `<div class="bili-ai-progress" role="progressbar" aria-label="总流程进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${state.progress}"><div class="bili-ai-progress-track"><i class="bili-ai-progress-fill bili-ai-progress-${state.progressState}" style="width:${state.progress}%"></i></div><small>总流程：${state.progressLabel} · ${state.progress}%</small></div>` : ""}
-      ${state.transcription ? `<section class="bili-ai-transcription" aria-live="polite"><div class="bili-ai-transcription-heading"><b>语音转文本</b><span>${state.transcription.progress == null ? "处理中" : `${state.transcription.progress.toFixed(1)}%`}</span></div><div class="bili-ai-progress-track"><i class="bili-ai-progress-fill bili-ai-progress-active" style="width:${Math.min(100, state.transcription.progress || 0)}%"></i></div><small>已处理 ${format(state.transcription.seconds)}${state.transcription.duration ? ` / ${format(state.transcription.duration)}` : ""} · 剩余时间：${formatEta(state.transcription.eta)}</small></section>` : ""}
-      ${state.localPrompt ? `<section class="bili-ai-local-prompt" aria-live="polite"><b>当前视频没有可用字幕</b><p>是否允许在本机使用语音识别？音频仅发送到本机服务；识别后的字幕仍会发送给你配置的 OpenRouter。</p><div><button id="bili-ai-local-confirm">仅本次识别</button><button id="bili-ai-local-cancel">取消</button></div></section>` : ""}
-      <div class="bili-ai-status"><span>模型</span><strong class="bili-ai-model">${escapeHtml(state.model)}</strong></div>
-      <label class="bili-ai-toggle"><input id="bili-ai-auto" type="checkbox" ${state.autoSkip ? "checked" : ""}> 自动跳过</label>
-      <div class="bili-ai-actions"><button id="bili-ai-retry">重新分析</button><button id="bili-ai-debug">调试信息</button></div>
-      <div class="bili-ai-segments">${state.segments.length ? state.segments.map((segment, index) => `<button class="bili-ai-segment" data-index="${index}"><b>${format(segment.start)}–${format(segment.end)}</b><span>${escapeHtml(segment.reason)}</span></button>`).join("") : "<p>尚未识别到广告时间段。</p>"}</div>
-      <section id="bili-ai-debug-view" class="bili-ai-debug" hidden>
-        <details open><summary>字幕获取</summary><pre>${escapeHtml(formatDebug(state.debug?.subtitle, "暂无字幕调试信息。"))}</pre></details>
-        <details><summary>AI 请求</summary><pre>${escapeHtml(formatDebug(state.debug?.request, "尚未发起 AI 请求。"))}</pre></details>
-        <details><summary>AI 响应</summary><pre>${escapeHtml(formatDebug(state.debug?.response, "尚未收到 AI 响应。"))}</pre></details>
-      </section><div id="bili-ai-resize-handle" aria-label="调整面板大小"></div>`;
+    const progress = Math.max(0, Math.min(100, state.progress));
+    const transcription = state.transcription;
+    const transcriptionProgress = Math.max(0, Math.min(100, transcription?.progress || 0));
 
+    panel.querySelector("#bili-ai-subtitle").textContent = state.subtitle;
+    panel.querySelector("#bili-ai-analysis").textContent = state.analysis;
+    panel.querySelector("#bili-ai-model").textContent = state.model;
+
+    const progressView = panel.querySelector("#bili-ai-progress");
+    progressView.hidden = state.progressState === "idle";
+    progressView.setAttribute("aria-valuenow", String(progress));
+    panel.querySelector("#bili-ai-progress-fill").className = `bili-ai-progress-fill bili-ai-progress-${state.progressState}`;
+    panel.querySelector("#bili-ai-progress-fill").style.width = `${progress}%`;
+    panel.querySelector("#bili-ai-progress-label").textContent = `总流程：${state.progressLabel} · ${progress}%`;
+
+    const transcriptionView = panel.querySelector("#bili-ai-transcription");
+    transcriptionView.hidden = !transcription;
+    if (transcription) {
+      panel.querySelector("#bili-ai-transcription-percent").textContent = transcription.progress == null ? "处理中" : `${transcription.progress.toFixed(1)}%`;
+      panel.querySelector("#bili-ai-transcription-fill").style.width = `${transcriptionProgress}%`;
+      panel.querySelector("#bili-ai-transcription-meta").textContent = `已处理 ${format(transcription.seconds)}${transcription.duration ? ` / ${format(transcription.duration)}` : ""} · 剩余时间：${formatEta(transcription.eta)}`;
+    }
+
+    panel.querySelector("#bili-ai-local-prompt").hidden = !state.localPrompt;
+    const autoSkip = panel.querySelector("#bili-ai-auto");
+    if (autoSkip.checked !== state.autoSkip) autoSkip.checked = state.autoSkip;
+    panel.querySelector("#bili-ai-debug-view").hidden = !state.debugOpen;
+    panel.querySelector("#bili-ai-debug-subtitle").textContent = formatDebug(state.debug?.subtitle, "暂无字幕调试信息。");
+    panel.querySelector("#bili-ai-debug-request").textContent = formatDebug(state.debug?.request, "尚未发起 AI 请求。");
+    panel.querySelector("#bili-ai-debug-response").textContent = formatDebug(state.debug?.response, "尚未收到 AI 响应。");
+
+    const segmentsKey = JSON.stringify(state.segments);
+    if (segmentsKey === renderedSegmentsKey) return;
+    renderedSegmentsKey = segmentsKey;
+    const segments = panel.querySelector("#bili-ai-segments");
+    segments.replaceChildren();
+    if (!state.segments.length) {
+      const empty = document.createElement("p");
+      empty.textContent = "尚未识别到广告时间段。";
+      segments.append(empty);
+      return;
+    }
+    state.segments.forEach((segment, index) => {
+      const button = document.createElement("button");
+      button.className = "bili-ai-segment";
+      button.dataset.index = String(index);
+      const time = document.createElement("b");
+      time.textContent = `${format(segment.start)}–${format(segment.end)}`;
+      const reason = document.createElement("span");
+      reason.textContent = segment.reason || "广告或推广内容";
+      button.append(time, reason);
+      segments.append(button);
+    });
+  }
+
+  function bindPanelEvents(panel) {
     panel.querySelector("#bili-ai-auto").addEventListener("change", (event) => { state.autoSkip = event.target.checked; });
     panel.querySelector("#bili-ai-retry").addEventListener("click", () => startAnalysis(true));
-    panel.querySelector("#bili-ai-local-confirm")?.addEventListener("click", () => runLocalTranscription());
-    panel.querySelector("#bili-ai-local-cancel")?.addEventListener("click", () => {
+    panel.querySelector("#bili-ai-local-confirm").addEventListener("click", () => runLocalTranscription());
+    panel.querySelector("#bili-ai-local-cancel").addEventListener("click", () => {
       state = { ...state, localPrompt: false, analysis: "已取消本次本机识别", progressState: "failed", progressLabel: "流程已取消" };
       render();
     });
     panel.querySelector("#bili-ai-debug").addEventListener("click", () => {
-      const view = panel.querySelector("#bili-ai-debug-view");
-      view.hidden = !view.hidden;
+      state = { ...state, debugOpen: !state.debugOpen };
+      render();
     });
-    panel.querySelectorAll(".bili-ai-segment").forEach((button) => button.addEventListener("click", () => {
+    panel.querySelector("#bili-ai-segments").addEventListener("click", (event) => {
+      const button = event.target.closest(".bili-ai-segment");
+      const segment = state.segments[Number(button?.dataset.index)];
       const video = document.querySelector("video");
-      const segment = state.segments[Number(button.dataset.index)];
       if (video && segment) video.currentTime = segment.end;
-    }));
-    bindPanelLayout(panel);
+    });
   }
 
   function escapeHtml(value) {
@@ -184,7 +224,22 @@
     if (document.getElementById(PANEL_ID)) return;
     const panel = document.createElement("section");
     panel.id = PANEL_ID;
+    panel.innerHTML = `
+      <div class="bili-ai-title" id="bili-ai-drag-handle"><span class="bili-ai-title-icon">AI</span><span class="bili-ai-title-copy"><b>AI 广告跳过</b><small>智能识别 · 自动略过</small></span><span class="bili-ai-drag-hint">拖动</span></div>
+      <div class="bili-ai-status"><span>字幕</span><strong id="bili-ai-subtitle"></strong></div>
+      <div class="bili-ai-status"><span>AI</span><strong id="bili-ai-analysis"></strong></div>
+      <div id="bili-ai-progress" class="bili-ai-progress" role="progressbar" aria-label="总流程进度" aria-valuemin="0" aria-valuemax="100"><div class="bili-ai-progress-track"><i id="bili-ai-progress-fill" class="bili-ai-progress-fill"></i></div><small id="bili-ai-progress-label"></small></div>
+      <section id="bili-ai-transcription" class="bili-ai-transcription" aria-live="polite"><div class="bili-ai-transcription-heading"><b>语音转文本</b><span id="bili-ai-transcription-percent"></span></div><div class="bili-ai-progress-track"><i id="bili-ai-transcription-fill" class="bili-ai-progress-fill bili-ai-progress-active"></i></div><small id="bili-ai-transcription-meta"></small></section>
+      <section id="bili-ai-local-prompt" class="bili-ai-local-prompt" aria-live="polite"><b>当前视频没有可用字幕</b><p>是否允许在本机使用语音识别？音频仅发送到本机服务；识别后的字幕仍会发送给你配置的 OpenRouter。</p><div><button id="bili-ai-local-confirm">仅本次识别</button><button id="bili-ai-local-cancel">取消</button></div></section>
+      <div class="bili-ai-status"><span>模型</span><strong id="bili-ai-model" class="bili-ai-model"></strong></div>
+      <label class="bili-ai-toggle"><input id="bili-ai-auto" type="checkbox"> 自动跳过</label>
+      <div class="bili-ai-actions"><button id="bili-ai-retry">重新分析</button><button id="bili-ai-debug">调试信息</button></div>
+      <div id="bili-ai-segments" class="bili-ai-segments"></div>
+      <section id="bili-ai-debug-view" class="bili-ai-debug"><details open><summary>字幕获取</summary><pre id="bili-ai-debug-subtitle"></pre></details><details><summary>AI 请求</summary><pre id="bili-ai-debug-request"></pre></details><details><summary>AI 响应</summary><pre id="bili-ai-debug-response"></pre></details></section>
+      <div id="bili-ai-resize-handle" aria-label="调整面板大小"></div>`;
     document.documentElement.append(panel);
+    bindPanelEvents(panel);
+    bindPanelLayout(panel);
     render();
     restorePanelLayout(panel);
   }

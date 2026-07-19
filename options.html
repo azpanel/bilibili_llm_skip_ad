@@ -1,2 +1,69 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><title>B 站 AI 广告跳过设置</title><link rel="stylesheet" href="options.css"></head><body><main><h1>B 站 AI 广告跳过</h1><p>密钥仅保存在本设备。字幕会发送到你配置的 OpenRouter 模型进行分析。</p><form id="settings"><label>OpenRouter API Key<input id="api-key" type="password" autocomplete="off" placeholder="sk-or-..."></label><small id="key-hint"></small><label>模型名称<input id="model" type="text" placeholder="deepseek/deepseek-chat" required></label><label>识别广告提示词<textarea id="prompt" rows="9" required></textarea></label><button type="submit">保存设置</button><output id="status" aria-live="polite"></output></form></main><script type="module" src="options.js"></script></body></html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>B 站 AI 广告跳过设置</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main class="options-page" aria-labelledby="page-title">
+    <header class="page-header">
+      <div class="brand-mark" aria-hidden="true">AI</div>
+      <div>
+        <h1 id="page-title">B 站 AI 广告跳过</h1>
+        <p>配置字幕分析所使用的模型与广告识别规则。</p>
+      </div>
+    </header>
+
+    <section class="settings-card" aria-label="扩展设置">
+      <div class="settings-tabs" role="tablist" aria-label="设置分类">
+        <button id="tab-connection" class="settings-tab" type="button" role="tab" aria-selected="true" aria-controls="panel-connection" tabindex="0" data-tab="connection">连接设置</button>
+        <button id="tab-rules" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-rules" tabindex="-1" data-tab="rules">识别规则</button>
+      </div>
+
+      <form id="settings" novalidate>
+        <section id="panel-connection" class="tab-panel" role="tabpanel" aria-labelledby="tab-connection" data-panel="connection">
+          <div class="section-heading">
+            <h2>连接设置</h2>
+            <p>连接 OpenRouter，为视频字幕选择分析模型。</p>
+          </div>
+
+          <div class="field-group">
+            <label for="api-key">OpenRouter API Key</label>
+            <input id="api-key" name="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-or-..." aria-describedby="key-help key-hint">
+            <p id="key-help" class="field-help">密钥仅保存在当前设备的扩展本地存储中；留空保存不会覆盖已保存的密钥。</p>
+            <p id="key-hint" class="field-status"></p>
+          </div>
+
+          <div class="field-group">
+            <label for="model">模型名称</label>
+            <input id="model" name="model" type="text" required autocomplete="off" spellcheck="false" placeholder="deepseek/deepseek-chat" aria-describedby="model-help">
+            <p id="model-help" class="field-help">填写 OpenRouter 支持的模型标识，例如 <code>deepseek/deepseek-chat</code>。</p>
+          </div>
+        </section>
+
+        <section id="panel-rules" class="tab-panel" role="tabpanel" aria-labelledby="tab-rules" data-panel="rules" hidden>
+          <div class="section-heading">
+            <h2>识别规则</h2>
+            <p>定义模型如何判断字幕中的商业广告与推广内容。</p>
+          </div>
+
+          <div class="field-group">
+            <label for="prompt">识别广告提示词</label>
+            <textarea id="prompt" name="prompt" rows="12" required aria-describedby="prompt-help"></textarea>
+            <p id="prompt-help" class="field-help">请保留 JSON 输出格式要求，否则扩展可能无法识别可跳过时间段。</p>
+          </div>
+        </section>
+
+        <div class="form-actions">
+          <button id="save-settings" type="submit">保存设置</button>
+          <p id="status" class="form-status" role="status" aria-live="polite" aria-atomic="true"></p>
+        </div>
+      </form>
+    </section>
+  </main>
+
+  <script type="module" src="options.js"></script>
+</body>
+</html>

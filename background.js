@@ -28,15 +28,21 @@ function localError(error, fallback) {
 }
 
 async function transcribeLocally({ requestId, identity, audioUrls, duration }, tabId) {
+  let lastReportedProgress = null;
   const reportProgress = (job) => {
     if (tabId == null) return;
+    const transcription = job.transcription || null;
+    const progress = [job.status, job.progress, job.message, transcription?.progress, transcription?.seconds, transcription?.duration, transcription?.eta];
+    const progressKey = JSON.stringify(progress);
+    if (progressKey === lastReportedProgress) return;
+    lastReportedProgress = progressKey;
     chrome.tabs.sendMessage(tabId, {
       type: "LOCAL_TRANSCRIPTION_PROGRESS",
       requestId,
       status: job.status,
       progress: job.progress,
       message: job.message,
-      transcription: job.transcription || null
+      transcription
     }).catch(() => {});
   };
   const health = await fetchLocal("/v1/health");
