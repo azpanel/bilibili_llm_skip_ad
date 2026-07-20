@@ -1,4 +1,4 @@
-import { toTimelineText } from "./lib/subtitles.js";
+import { normalizeSubtitleBodies, toTimelineText } from "./lib/subtitles.js";
 import { extractJson, normalizeSegments } from "./lib/segments.js";
 
 const DEFAULT_PROMPT = `你是视频内容审核助手。根据带时间戳的字幕，识别明确的商业广告、品牌推广、带货、课程/社群/产品引流片段。不要把普通内容、口播开场、创作者自我介绍误判为广告；不确定时不要输出。仅返回 JSON，格式为 {"segments":[{"start":12.3,"end":45.6,"reason":"简短原因"}]}，start/end 必须是秒数。`;
@@ -62,10 +62,12 @@ async function transcribeLocally({ requestId, identity, audioUrls, duration }, t
     const job = await response.json();
     reportProgress(job);
     if (job.status === "completed") {
+      const subtitleItems = normalizeSubtitleBodies((job.segments || []).map((segment) => ({ from: segment.start, to: segment.end, content: segment.text })));
       return {
         status: "ready",
         subtitleName: "本机语音识别",
-        timeline: toTimelineText((job.segments || []).map((segment) => ({ from: segment.start, to: segment.end, content: segment.text })))
+        subtitleItems,
+        timeline: toTimelineText(subtitleItems)
       };
     }
     if (job.status === "failed" || job.status === "cancelled") throw new Error(job.error || job.message || "本机语音识别失败。");
@@ -139,8 +141,9 @@ async function fetchSubtitles(request) {
       const response = await fetch(apiUrl(subtitleInfo.subtitle_url), { credentials: "include" });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const subtitle = await response.json();
-      const timeline = toTimelineText(subtitle.body);
-      if (timeline) return { status: "ready", timeline, subtitleName: subtitleInfo.lan_doc || subtitleInfo.lan || "字幕" };
+      const subtitleItems = normalizeSubtitleBodies(subtitle.body);
+      const timeline = toTimelineText(subtitleItems);
+      if (timeline) return { status: "ready", timeline, subtitleItems, subtitleName: subtitleInfo.lan_doc || subtitleInfo.lan || "字幕" };
       downloadError = "字幕内容为空";
     } catch (error) {
       downloadError = error.message;

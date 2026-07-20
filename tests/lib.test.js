@@ -1,11 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatTimestamp, toTimelineText } from "../lib/subtitles.js";
+import { formatTimestamp, normalizeSubtitleBodies, toTimelineText } from "../lib/subtitles.js";
 import { extractJson, normalizeSegments } from "../lib/segments.js";
 
 test("字幕时间线使用可读的时间戳并忽略无效字幕", () => {
   assert.equal(formatTimestamp(3661), "01:01:01");
   assert.equal(toTimelineText([{ from: 1.2, to: 3.9, content: "  品牌   推广 " }, { from: 4, to: 4, content: "无效" }]), "[00:01 - 00:03] 品牌 推广");
+});
+
+test("B 站与本机字幕统一为可展示的条目", () => {
+  assert.deepEqual(normalizeSubtitleBodies([
+    { from: 1.2, to: 3.9, content: "  B 站   字幕 " },
+    { start: 4, end: 6, text: " 本机字幕 " },
+    { from: 6, to: 6, content: "无效" },
+    { start: 7, end: 8, text: "   " }
+  ]), [
+    { start: 1.2, end: 3.9, text: "B 站 字幕" },
+    { start: 4, end: 6, text: "本机字幕" }
+  ]);
 });
 
 test("支持从 Markdown 代码块提取模型 JSON", () => {

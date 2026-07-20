@@ -109,6 +109,27 @@
     }
   }
 
+  function renderSubtitleDebug(container, subtitleItems, fallbackText) {
+    container.replaceChildren();
+    if (!subtitleItems?.length) {
+      const empty = document.createElement("p");
+      empty.className = "bili-ai-debug-subtitle-empty";
+      empty.textContent = fallbackText || "暂无字幕调试信息。";
+      container.append(empty);
+      return;
+    }
+    subtitleItems.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "bili-ai-debug-subtitle-row";
+      const time = document.createElement("time");
+      time.textContent = `${format(item.start)}–${format(item.end)}`;
+      const text = document.createElement("span");
+      text.textContent = item.text;
+      row.append(time, text);
+      container.append(row);
+    });
+  }
+
   function render() {
     const panel = document.getElementById(PANEL_ID);
     if (!panel) return;
@@ -139,7 +160,7 @@
     const autoSkip = panel.querySelector("#bili-ai-auto");
     if (autoSkip.checked !== state.autoSkip) autoSkip.checked = state.autoSkip;
     panel.querySelector("#bili-ai-debug-view").hidden = !state.debugOpen;
-    panel.querySelector("#bili-ai-debug-subtitle").textContent = formatDebug(state.debug?.subtitle, "暂无字幕调试信息。");
+    renderSubtitleDebug(panel.querySelector("#bili-ai-debug-subtitle"), state.debug?.subtitleItems, state.debug?.subtitle);
     panel.querySelector("#bili-ai-debug-request").textContent = formatDebug(state.debug?.request, "尚未发起 AI 请求。");
     panel.querySelector("#bili-ai-debug-response").textContent = formatDebug(state.debug?.response, "尚未收到 AI 响应。");
 
@@ -279,7 +300,7 @@
       <label class="bili-ai-toggle"><input id="bili-ai-auto" type="checkbox"> 自动跳过</label>
       <div class="bili-ai-actions"><button id="bili-ai-retry">重新分析</button><button id="bili-ai-debug">调试信息</button></div>
       <div id="bili-ai-segments" class="bili-ai-segments"></div>
-      <section id="bili-ai-debug-view" class="bili-ai-debug"><details open><summary>字幕获取</summary><pre id="bili-ai-debug-subtitle"></pre></details><details><summary>AI 请求</summary><pre id="bili-ai-debug-request"></pre></details><details><summary>AI 响应</summary><pre id="bili-ai-debug-response"></pre></details></section>
+      <section id="bili-ai-debug-view" class="bili-ai-debug"><details open><summary>字幕获取</summary><div id="bili-ai-debug-subtitle"></div></details><details><summary>AI 请求</summary><pre id="bili-ai-debug-request"></pre></details><details><summary>AI 响应</summary><pre id="bili-ai-debug-response"></pre></details></section>
       <div id="bili-ai-resize-handle" aria-label="调整面板大小"></div>`;
     document.documentElement.append(panel);
     bindPanelEvents(panel);
@@ -324,10 +345,10 @@
       render();
       return;
     }
-    state = { ...state, transcription: null, subtitle: "已获取（本机语音识别）", analysis: "分析中", progress: 70, progressLabel: "正在等待模型分析", progressState: "active" };
+    state = { ...state, transcription: null, subtitle: "已获取（本机语音识别）", analysis: "分析中", progress: 70, progressLabel: "正在等待模型分析", progressState: "active", debug: { subtitleItems: result.subtitleItems || [] } };
     render();
     const analyzed = await send({ type: "ANALYZE", bvid: identity.bvid || `aid-${identity.aid}`, cacheKey: `${identity.key}:local`, timeline: result.timeline, duration: video?.duration, force: true });
-    state = { ...state, analysis: analyzed.status === "completed" ? `已完成（${analyzed.segments.length} 段）` : analyzed.error || "分析失败", progress: analyzed.status === "completed" ? 100 : 90, progressLabel: analyzed.status === "completed" ? "分析完成" : "流程未完成", progressState: analyzed.status === "completed" ? "completed" : "failed", segments: analyzed.segments || [], debug: { request: analyzed.requestDebug || "", response: analyzed.responseDebug || "" } };
+    state = { ...state, analysis: analyzed.status === "completed" ? `已完成（${analyzed.segments.length} 段）` : analyzed.error || "分析失败", progress: analyzed.status === "completed" ? 100 : 90, progressLabel: analyzed.status === "completed" ? "分析完成" : "流程未完成", progressState: analyzed.status === "completed" ? "completed" : "failed", segments: analyzed.segments || [], debug: { ...state.debug, request: analyzed.requestDebug || "", response: analyzed.responseDebug || "" } };
     render();
   }
 
@@ -369,7 +390,7 @@
       render();
       return;
     }
-    state = { ...state, subtitle: `已获取（${subtitles.subtitleName}）`, analysis: "分析中", progress: 70, progressLabel: "正在等待模型分析", progressState: "active" };
+    state = { ...state, subtitle: `已获取（${subtitles.subtitleName}）`, analysis: "分析中", progress: 70, progressLabel: "正在等待模型分析", progressState: "active", debug: { subtitleItems: subtitles.subtitleItems || [] } };
     render();
     const video = document.querySelector("video");
     const result = await send({ type: "ANALYZE", bvid: bvid || `aid-${identity.aid}`, cacheKey: key, timeline: subtitles.timeline, duration: video?.duration, force });
@@ -383,7 +404,7 @@
       progressLabel: result.status === "completed" ? "分析完成" : "流程未完成",
       progressState: result.status === "completed" ? "completed" : "failed",
       segments: result.segments || [],
-      debug: { request: result.requestDebug || "", response: result.responseDebug || "" }
+      debug: { ...state.debug, request: result.requestDebug || "", response: result.responseDebug || "" }
     };
     render();
   }
