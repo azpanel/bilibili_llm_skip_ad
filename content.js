@@ -1,8 +1,12 @@
 (() => {
   const PANEL_ID = "bili-ai-ad-skip-panel";
   const TOAST_ID = "bili-ai-ad-skip-toast";
+  const SUBTITLE_CONTROL_SELECTOR = ".bpx-player-ctrl-subtitle-result";
+  const SUBTITLE_CONTROL_WAIT_TIMEOUT = 10_000;
   let toastTimer = null;
   let currentBvid = null;
+  let analysisRunId = 0;
+  let cancelSubtitleControlWait = null;
   const PANEL_LAYOUT_KEY = "panelLayout";
   let state = { subtitle: "等待视频", analysis: "未开始", model: "读取中", progress: 0, progressLabel: "", progressState: "idle", transcription: null, segments: [], debug: null, autoSkip: true, localPrompt: false, debugOpen: false };
   let localRequestId = null;
@@ -44,6 +48,46 @@
 
   function send(message) {
     return chrome.runtime.sendMessage(message);
+  }
+
+  function isCurrentAnalysisRun(runId, key) {
+    return runId === analysisRunId && currentBvid === key && getVideoIdentity().key === key;
+  }
+
+  function invalidateAnalysisRun() {
+    analysisRunId += 1;
+    cancelSubtitleControlWait?.();
+    cancelSubtitleControlWait = null;
+  }
+
+  function waitForSubtitleControl(runId, key) {
+    return new Promise((resolve) => {
+      let settled = false;
+      let observer = null;
+      let timeoutId = null;
+      const finish = (status) => {
+        if (settled) return;
+        settled = true;
+        observer?.disconnect();
+        clearTimeout(timeoutId);
+        if (cancelSubtitleControlWait === cancel) cancelSubtitleControlWait = null;
+        resolve({ status });
+      };
+      const cancel = () => finish("cancelled");
+      const check = () => {
+        if (!isCurrentAnalysisRun(runId, key)) return finish("cancelled");
+        if (document.querySelector(SUBTITLE_CONTROL_SELECTOR)) finish("ready");
+      };
+      cancelSubtitleControlWait = cancel;
+      check();
+      if (settled) return;
+      observer = new MutationObserver(check);
+      observer.observe(document.documentElement, { childList: true, subtree: true });
+      timeoutId = setTimeout(() => {
+        if (!isCurrentAnalysisRun(runId, key)) return finish("cancelled");
+        finish(document.querySelector(SUBTITLE_CONTROL_SELECTOR) ? "ready" : "timeout");
+      }, SUBTITLE_CONTROL_WAIT_TIMEOUT);
+    });
   }
 
   function format(seconds) {
@@ -291,13 +335,31 @@
     const identity = getVideoIdentity();
     if (!identity.key) return;
     const { bvid, key } = identity;
+    invalidateAnalysisRun();
+    const runId = analysisRunId;
     currentBvid = key;
     skipped = new Set();
+    state = { ...state, subtitle: "等待播放器准备", analysis: "等待字幕控件", progress: 15, progressLabel: "正在等待播放器字幕功能加载", progressState: "active", segments: [], debug: null, localPrompt: false };
+    render();
     const model = await send({ type: "GET_MODEL" });
-    state = { ...state, model: model.model, subtitle: "获取中", analysis: "等待字幕", progress: 15, progressLabel: "正在获取字幕", progressState: "active", segments: [], debug: null };
+    if (!isCurrentAnalysisRun(runId, key)) return;
+    state = { ...state, model: model.model };
+    render();
+
+    const subtitleControl = await waitForSubtitleControl(runId, key);
+    if (subtitleControl.status === "cancelled") return;
+    if (subtitleControl.status === "timeout") {
+      if (!isCurrentAnalysisRun(runId, key)) return;
+      state = { ...state, subtitle: "播放器字幕控件未出现", analysis: "请等待播放器加载后重试", progressLabel: "字幕入口等待超时", progressState: "failed" };
+      render();
+      return;
+    }
+    if (!isCurrentAnalysisRun(runId, key) || !document.querySelector(SUBTITLE_CONTROL_SELECTOR)) return;
+
+    state = { ...state, subtitle: "获取中", analysis: "正在获取字幕", progressLabel: "正在获取字幕", progressState: "active" };
     render();
     const subtitles = await send({ type: "FETCH_SUBTITLES", ...identity });
-    if (currentBvid !== key) return;
+    if (!isCurrentAnalysisRun(runId, key)) return;
     if (subtitles.status !== "ready") {
       if (subtitles.status === "no-subtitles") {
         state = { ...state, subtitle: "没有可用字幕", analysis: "等待选择本机识别", progress: 20, progressLabel: "请确认是否使用本机语音识别", progressState: "active", localPrompt: true, debug: { subtitle: subtitles.debug || "" } };
@@ -311,9 +373,9 @@
     render();
     const video = document.querySelector("video");
     const result = await send({ type: "ANALYZE", bvid: bvid || `aid-${identity.aid}`, cacheKey: key, timeline: subtitles.timeline, duration: video?.duration, force });
+    if (!isCurrentAnalysisRun(runId, key)) return;
     state = { ...state, progress: 90, progressLabel: "正在解析识别结果", progressState: "active" };
     render();
-    if (currentBvid !== key) return;
     state = {
       ...state,
       analysis: result.status === "completed" ? `已完成（${result.segments.length} 段）` : result.status === "needs-settings" ? "请先在扩展设置中填写 API Key 和模型" : result.error || "分析失败",
@@ -341,7 +403,14 @@
 
   function checkPage() {
     const identity = getVideoIdentity();
-    if (!identity.key || identity.key === currentBvid) return;
+    if (!identity.key) {
+      if (currentBvid) {
+        invalidateAnalysisRun();
+        currentBvid = null;
+      }
+      return;
+    }
+    if (identity.key === currentBvid) return;
     ensurePanel();
     startAnalysis();
   }
