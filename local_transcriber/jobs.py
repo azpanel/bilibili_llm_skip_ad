@@ -16,6 +16,8 @@ from .bilibili_audio import download_audio
 from .transcribe import Transcriber
 
 JOB_TTL = 3600
+ACTIVE_JOB_STATUSES = {"queued", "downloading", "transcribing"}
+TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled"}
 
 
 @dataclass
@@ -45,32 +47,50 @@ class JobManager:
 
     async def create(self, request: dict) -> Job:
         async with self.lock:
-            job = Job(uuid.uuid4().hex, request)
-            self.jobs[job.id] = job
-            job.task = asyncio.create_task(self._run(job))
-            return job
+            return self._create(request)
+
+    async def create_if_capacity(self, request: dict, limit: int) -> Job | None:
+        async with self.lock:
+            active_count = sum(job.status in ACTIVE_JOB_STATUSES for job in self.jobs.values())
+            if active_count >= limit:
+                return None
+            return self._create(request)
+
+    def _create(self, request: dict) -> Job:
+        job = Job(uuid.uuid4().hex, request)
+        self.jobs[job.id] = job
+        job.task = asyncio.create_task(self._run(job))
+        return job
 
     async def get(self, job_id: str) -> Job | None:
         async with self.lock:
             return self.jobs.get(job_id)
 
     async def cancel(self, job_id: str) -> bool:
-        job = await self.get(job_id)
-        if not job:
-            return False
-        if job.task and not job.task.done():
-            job.task.cancel()
-        job.status = "cancelled"
-        job.message = "已取消"
-        await self._cleanup(job)
-        return True
+        async with self.lock:
+            job = self.jobs.get(job_id)
+            if not job:
+                return False
+            if job.status in TERMINAL_JOB_STATUSES:
+                return True
+            if job.task and not job.task.done():
+                job.task.cancel()
+            job.status = "cancelled"
+            job.message = "已取消"
+            return True
 
     async def cleanup_expired(self) -> None:
         now = time.time()
-        for job in list(self.jobs.values()):
-            if now - job.created_at > JOB_TTL and job.status in {"completed", "failed", "cancelled"}:
-                await self._cleanup(job)
+        async with self.lock:
+            expired = [
+                job
+                for job in self.jobs.values()
+                if now - job.created_at > JOB_TTL and job.status in TERMINAL_JOB_STATUSES
+            ]
+            for job in expired:
                 self.jobs.pop(job.id, None)
+        for job in expired:
+            await self._cleanup(job)
 
     async def _run(self, job: Job) -> None:
         job.directory = Path(tempfile.mkdtemp(prefix=f"bili-transcribe-{job.id}-"))

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -72,6 +72,7 @@ from .jobs import JobManager
 PORT = int(os.getenv("BILI_TRANSCRIBER_PORT", "8765"))
 TOKEN = os.getenv("BILI_TRANSCRIBER_TOKEN", "")
 MODEL = os.getenv("BILI_TRANSCRIBER_MODEL", "small")
+MAX_ACTIVE_JOBS = 4
 manager = JobManager(MODEL)
 
 
@@ -99,9 +100,13 @@ def authorize(request: Request) -> None:
 async def lifespan(_app: FastAPI):
     _dashboard.start()
     configure_dashboard_logging()
+    cleanup_task = asyncio.create_task(cleanup_loop(), name="transcription-cleanup")
     try:
         yield
     finally:
+        cleanup_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await cleanup_task
         for job in list(manager.jobs.values()):
             await manager.cancel(job.id)
         _dashboard.stop()
@@ -119,9 +124,9 @@ async def health():
 @app.post("/v1/transcriptions", status_code=202)
 async def create_transcription(body: RequestBody, request: Request):
     authorize(request)
-    if len(manager.jobs) >= 4:
+    job = await manager.create_if_capacity(body.model_dump(mode="json"), MAX_ACTIVE_JOBS)
+    if not job:
         raise HTTPException(429, "本机转写任务过多。")
-    job = await manager.create(body.model_dump(mode="json"))
     return {"jobId": job.id, "status": job.status}
 
 
