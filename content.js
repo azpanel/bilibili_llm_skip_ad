@@ -163,6 +163,7 @@
     if (autoSkip.checked !== state.autoSkip) autoSkip.checked = state.autoSkip;
     panel.querySelector("#bili-ai-debug-view").hidden = !state.debugOpen;
     renderSubtitleDebug(panel.querySelector("#bili-ai-debug-subtitle"), state.debug?.subtitleItems, state.debug?.subtitle);
+    panel.querySelector("#bili-ai-debug-audio").textContent = state.debug?.audioUrls?.length ? state.debug.audioUrls.join("\n\n") : "尚未解析到音频文件。";
     panel.querySelector("#bili-ai-debug-request").textContent = formatDebug(state.debug?.request, "尚未发起 AI 请求。");
     panel.querySelector("#bili-ai-debug-response").textContent = formatDebug(state.debug?.response, "尚未收到 AI 响应。");
 
@@ -292,6 +293,7 @@
     const panel = document.createElement("section");
     panel.id = PANEL_ID;
     panel.innerHTML = `
+      <div class="bili-ai-panel-content">
       <div class="bili-ai-title" id="bili-ai-drag-handle"><span class="bili-ai-title-icon">AI</span><span class="bili-ai-title-copy"><b>AI 广告跳过</b><small>智能识别 · 自动略过</small></span><span class="bili-ai-drag-hint">拖动</span></div>
       <div class="bili-ai-status"><span>字幕</span><strong id="bili-ai-subtitle"></strong></div>
       <div class="bili-ai-status"><span>AI</span><strong id="bili-ai-analysis"></strong></div>
@@ -302,7 +304,8 @@
       <label class="bili-ai-toggle"><input id="bili-ai-auto" type="checkbox"> 自动跳过</label>
       <div class="bili-ai-actions"><button id="bili-ai-retry">重新分析</button><button id="bili-ai-debug">调试信息</button></div>
       <div id="bili-ai-segments" class="bili-ai-segments"></div>
-      <section id="bili-ai-debug-view" class="bili-ai-debug"><details open><summary>字幕获取</summary><div id="bili-ai-debug-subtitle"></div></details><details><summary>AI 请求</summary><pre id="bili-ai-debug-request"></pre></details><details><summary>AI 响应</summary><pre id="bili-ai-debug-response"></pre></details></section>
+      <section id="bili-ai-debug-view" class="bili-ai-debug"><details open><summary>字幕获取</summary><div id="bili-ai-debug-subtitle"></div></details><details><summary>音频文件</summary><pre id="bili-ai-debug-audio"></pre></details><details><summary>AI 请求</summary><pre id="bili-ai-debug-request"></pre></details><details><summary>AI 响应</summary><pre id="bili-ai-debug-response"></pre></details></section>
+      </div>
       <div id="bili-ai-resize-handle" aria-label="调整面板大小"></div>`;
     document.documentElement.append(panel);
     bindPanelEvents(panel);
@@ -316,7 +319,7 @@
     const requestId = crypto.randomUUID();
     localRequestId = requestId;
     const video = document.querySelector("video");
-    state = { ...state, localPrompt: false, subtitle: "获取音频中", analysis: "本机识别中", progress: 20, progressLabel: "正在提交本机识别任务", progressState: "active", debug: null };
+    state = { ...state, localPrompt: false, subtitle: "获取音频中", analysis: "本机识别中", progress: 20, progressLabel: "正在提交本机识别任务", progressState: "active", debug: { audioUrls: [] } };
     render();
     const isSupportedAudioUrl = (value) => {
       try {
@@ -335,6 +338,8 @@
       const score = (value) => /-(?:30216|30232|30280)\.m4s(?:\?|$)/i.test(value) ? 2 : /-\d+\.m4s(?:\?|$)/i.test(value) ? 1 : 0;
       return score(right) - score(left);
     });
+    state = { ...state, debug: { ...state.debug, audioUrls } };
+    render();
     if (!audioUrls.length) {
       state = { ...state, subtitle: "音频获取失败", analysis: "未找到独立音频流", progress: 20, progressLabel: "请播放片刻后重试", progressState: "failed" };
       render();
@@ -347,7 +352,7 @@
       render();
       return;
     }
-    state = { ...state, transcription: null, subtitle: "已获取（本机语音识别）", analysis: "分析中", progress: 70, progressLabel: "正在等待模型分析", progressState: "active", debug: { subtitleItems: result.subtitleItems || [] } };
+    state = { ...state, transcription: null, subtitle: "已获取（本机语音识别）", analysis: "分析中", progress: 70, progressLabel: "正在等待模型分析", progressState: "active", debug: { ...state.debug, subtitleItems: result.subtitleItems || [] } };
     render();
     const analyzed = await send({ type: "ANALYZE", bvid: identity.bvid || `aid-${identity.aid}`, cacheKey: `${identity.key}:local`, timeline: result.timeline, duration: video?.duration, force: true });
     state = { ...state, analysis: analyzed.status === "completed" ? `已完成（${analyzed.segments.length} 段）` : analyzed.error || "分析失败", progress: analyzed.status === "completed" ? 100 : 90, progressLabel: analyzed.status === "completed" ? "分析完成" : "流程未完成", progressState: analyzed.status === "completed" ? "completed" : "failed", segments: analyzed.segments || [], debug: { ...state.debug, request: analyzed.requestDebug || "", response: analyzed.responseDebug || "" } };
