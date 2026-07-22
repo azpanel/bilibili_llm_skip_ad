@@ -213,6 +213,87 @@ code {
   font: .92em ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
+.skip-mid-add-row {
+  display: flex;
+  gap: 10px;
+}
+
+.skip-mid-add-row button,
+.skip-mid-item button {
+  flex: 0 0 auto;
+  border: 1px solid var(--color-primary);
+  border-radius: 8px;
+  background: var(--color-primary);
+  color: #fff;
+  cursor: pointer;
+  padding: 9px 13px;
+  font-weight: 650;
+}
+
+.skip-mid-add-row button:hover,
+.skip-mid-item button:hover {
+  background: var(--color-primary-dark);
+}
+
+.skip-mid-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.skip-mid-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 46px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 7px 9px;
+}
+
+.skip-mid-item code {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skip-mid-item input {
+  flex: 1;
+  min-width: 0;
+}
+
+.skip-mid-item .skip-mid-secondary {
+  border-color: var(--color-input-border);
+  background: #fff;
+  color: var(--color-text);
+}
+
+.skip-mid-item .skip-mid-secondary:hover {
+  background: #eff6ff;
+}
+
+.skip-mid-item .skip-mid-delete {
+  border-color: #fecaca;
+  background: #fff1f2;
+  color: var(--color-error);
+}
+
+.skip-mid-item .skip-mid-delete:hover {
+  background: #fee2e2;
+}
+
+.skip-mid-empty {
+  border: 1px dashed var(--color-input-border);
+  border-radius: 8px;
+  color: var(--color-muted);
+  padding: 12px;
+  text-align: center;
+}
+
 .form-actions {
   display: flex;
   align-items: center;
@@ -296,6 +377,16 @@ code {
   }
 
   #save-settings {
+    width: 100%;
+  }
+
+  .skip-mid-add-row,
+  .skip-mid-item {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .skip-mid-item button {
     width: 100%;
   }
 }

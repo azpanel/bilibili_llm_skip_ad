@@ -20,6 +20,7 @@
       <div class="settings-tabs" role="tablist" aria-label="设置分类">
         <button id="tab-connection" class="settings-tab" type="button" role="tab" aria-selected="true" aria-controls="panel-connection" tabindex="0" data-tab="connection">连接设置</button>
         <button id="tab-rules" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-rules" tabindex="-1" data-tab="rules">识别规则</button>
+        <button id="tab-skip-users" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-skip-users" tabindex="-1" data-tab="skip-users">跳过用户</button>
       </div>
 
       <form id="settings" novalidate>
@@ -54,6 +55,25 @@
             <textarea id="prompt" name="prompt" rows="12" required aria-describedby="prompt-help"></textarea>
             <p id="prompt-help" class="field-help">请保留 JSON 输出格式要求，否则扩展可能无法识别可跳过时间段。</p>
           </div>
+        </section>
+
+        <section id="panel-skip-users" class="tab-panel" role="tabpanel" aria-labelledby="tab-skip-users" data-panel="skip-users" hidden>
+          <div class="section-heading">
+            <h2>跳过投稿用户</h2>
+            <p>命中投稿用户 MID 后，扩展不会获取字幕、使用本机转写或请求 OpenRouter。</p>
+          </div>
+
+          <div class="field-group">
+            <label for="skip-mid-input">投稿用户 MID</label>
+            <div class="skip-mid-add-row">
+              <input id="skip-mid-input" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="例如 123456" aria-describedby="skip-mid-help skip-mid-error">
+              <button id="add-skip-mid" type="button">添加</button>
+            </div>
+            <p id="skip-mid-help" class="field-help">仅支持正整数 MID；添加、编辑或删除后会立即保存。</p>
+            <p id="skip-mid-error" class="field-status" role="alert"></p>
+          </div>
+
+          <ul id="skip-mid-list" class="skip-mid-list" aria-label="跳过投稿用户列表"></ul>
         </section>
 
         <div class="form-actions">

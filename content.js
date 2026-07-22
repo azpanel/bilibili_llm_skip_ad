@@ -10,6 +10,7 @@
   let analysisRunId = 0;
   let cancelElementWait = null;
   const PANEL_LAYOUT_KEY = "panelLayout";
+  const SKIPPED_UPLOADER_MIDS_KEY = "skippedUploaderMids";
   let state = { subtitle: "等待视频", analysis: "未开始", model: "读取中", progress: 0, progressLabel: "", progressState: "idle", transcription: null, segments: [], debug: null, autoSkip: true, localPrompt: false, debugOpen: false };
   let localRequestId = null;
   let renderedSegmentsKey = null;
@@ -34,6 +35,19 @@
   });
   let lastJumpAt = 0;
 
+  function normalizeUploaderMid(value) {
+    const trimmed = String(value ?? "").trim();
+    if (!/^\d+$/.test(trimmed)) return null;
+    const normalized = trimmed.replace(/^0+/, "");
+    return normalized || null;
+  }
+
+  function getUploaderIdFromPage() {
+    const uploaderLink = document.querySelector('.upinfo-detail .up-name[href*="space.bilibili.com/"], .up-name[href*="space.bilibili.com/"]');
+    const href = uploaderLink?.getAttribute("href") || "";
+    return normalizeUploaderMid(href.match(/space\.bilibili\.com\/(\d+)/i)?.[1]);
+  }
+
   function getVideoIdentity() {
     const pageState = window.__INITIAL_STATE__ || {};
     const videoData = pageState.videoData || {};
@@ -45,7 +59,19 @@
     const bvid = pathBvid || videoData.bvid || episode.bvid || pageState.bvid || null;
     const aid = Number(pathAid || videoData.aid || episode.aid || pageState.aid) || null;
     const cid = page.cid || pageState.cid || episode.cid || null;
-    return { bvid, aid, cid, pageNumber, key: bvid || aid || cid || null };
+    const uploaderId = normalizeUploaderMid(videoData.owner?.mid || episode.up_info?.mid || pageState.upData?.mid) || getUploaderIdFromPage();
+    return { bvid, aid, cid, pageNumber, key: bvid || aid || cid || null, uploaderId };
+  }
+
+  async function isUploaderSkipped(identity) {
+    if (!identity.uploaderId) return false;
+    try {
+      const stored = await chrome.storage.sync.get(SKIPPED_UPLOADER_MIDS_KEY);
+      const mids = Array.isArray(stored[SKIPPED_UPLOADER_MIDS_KEY]) ? stored[SKIPPED_UPLOADER_MIDS_KEY] : [];
+      return mids.some((mid) => normalizeUploaderMid(mid) === identity.uploaderId);
+    } catch {
+      return false;
+    }
   }
 
   function send(message) {
@@ -164,8 +190,10 @@
     panel.querySelector("#bili-ai-debug-view").hidden = !state.debugOpen;
     renderSubtitleDebug(panel.querySelector("#bili-ai-debug-subtitle"), state.debug?.subtitleItems, state.debug?.subtitle);
     panel.querySelector("#bili-ai-debug-audio").textContent = state.debug?.audioUrls?.length ? state.debug.audioUrls.join("\n\n") : "尚未解析到音频文件。";
+    panel.querySelector("#bili-ai-debug-uploader").textContent = state.debug?.uploaderId || "当前页面未提取到投稿用户 MID。";
     panel.querySelector("#bili-ai-debug-request").textContent = formatDebug(state.debug?.request, "尚未发起 AI 请求。");
     panel.querySelector("#bili-ai-debug-response").textContent = formatDebug(state.debug?.response, "尚未收到 AI 响应。");
+    panel.querySelector("#bili-ai-debug-reasoning").textContent = formatDebug(state.debug?.reasoning, "本次响应未提供 reasoning 字段。");
 
     const segmentsKey = JSON.stringify(state.segments);
     if (segmentsKey === renderedSegmentsKey) return;
@@ -202,6 +230,13 @@
     panel.querySelector("#bili-ai-debug").addEventListener("click", () => {
       state = { ...state, debugOpen: !state.debugOpen };
       render();
+    });
+    panel.querySelector("#bili-ai-open-settings").addEventListener("click", async () => {
+      const result = await send({ type: "OPEN_OPTIONS" });
+      if (result?.status === "failed") {
+        state = { ...state, analysis: result.error || "无法打开扩展设置页。" };
+        render();
+      }
     });
     panel.querySelector("#bili-ai-segments").addEventListener("click", (event) => {
       const button = event.target.closest(".bili-ai-segment");
@@ -304,7 +339,8 @@
       <label class="bili-ai-toggle"><input id="bili-ai-auto" type="checkbox"> 自动跳过</label>
       <div class="bili-ai-actions"><button id="bili-ai-retry">重新分析</button><button id="bili-ai-debug">调试信息</button></div>
       <div id="bili-ai-segments" class="bili-ai-segments"></div>
-      <section id="bili-ai-debug-view" class="bili-ai-debug"><details open><summary>字幕获取</summary><div id="bili-ai-debug-subtitle"></div></details><details><summary>音频文件</summary><pre id="bili-ai-debug-audio"></pre></details><details><summary>AI 请求</summary><pre id="bili-ai-debug-request"></pre></details><details><summary>AI 响应</summary><pre id="bili-ai-debug-response"></pre></details></section>
+      <section id="bili-ai-debug-view" class="bili-ai-debug"><details open><summary>投稿用户 MID</summary><pre id="bili-ai-debug-uploader"></pre></details><details><summary>字幕获取</summary><div id="bili-ai-debug-subtitle"></div></details><details><summary>音频文件</summary><pre id="bili-ai-debug-audio"></pre></details><details><summary>AI 请求</summary><pre id="bili-ai-debug-request"></pre></details><details><summary>AI 响应</summary><pre id="bili-ai-debug-response"></pre></details><details><summary>模型推理（reasoning）</summary><pre id="bili-ai-debug-reasoning"></pre></details></section>
+      <div class="bili-ai-settings-action"><button id="bili-ai-open-settings" type="button">打开扩展设置</button></div>
       </div>
       <div id="bili-ai-resize-handle" aria-label="调整面板大小"></div>`;
     document.documentElement.append(panel);
@@ -316,10 +352,18 @@
 
   async function runLocalTranscription(force = false) {
     const identity = getVideoIdentity();
+    if (!identity.key || currentBvid !== identity.key) return;
+    if (await isUploaderSkipped(identity)) {
+      if (currentBvid !== identity.key || getVideoIdentity().key !== identity.key) return;
+      state = { ...state, subtitle: "已跳过", analysis: "投稿用户 MID 已在跳过名单中", progress: 100, progressLabel: "已按跳过名单停止分析", progressState: "completed", segments: [], localPrompt: false };
+      render();
+      return;
+    }
+    if (currentBvid !== identity.key || getVideoIdentity().key !== identity.key) return;
     const requestId = crypto.randomUUID();
     localRequestId = requestId;
     const video = document.querySelector("video");
-    state = { ...state, localPrompt: false, subtitle: "获取音频中", analysis: "本机识别中", progress: 20, progressLabel: "正在提交本机识别任务", progressState: "active", debug: { audioUrls: [] } };
+    state = { ...state, localPrompt: false, subtitle: "获取音频中", analysis: "本机识别中", progress: 20, progressLabel: "正在提交本机识别任务", progressState: "active", debug: { ...state.debug, audioUrls: [] } };
     render();
     const isSupportedAudioUrl = (value) => {
       try {
@@ -346,7 +390,7 @@
       return;
     }
     const result = await send({ type: "TRANSCRIBE_LOCAL", requestId, identity, audioUrls, duration: video?.duration });
-    if (currentBvid !== identity.key) return;
+    if (currentBvid !== identity.key || getVideoIdentity().key !== identity.key) return;
     if (result.status !== "ready" || !result.timeline) {
       state = { ...state, subtitle: "本机识别失败", analysis: result.error || "无法生成字幕", progress: 20, progressLabel: "流程未完成", progressState: "failed" };
       render();
@@ -355,7 +399,8 @@
     state = { ...state, transcription: null, subtitle: "已获取（本机语音识别）", analysis: "分析中", progress: 70, progressLabel: "正在等待模型分析", progressState: "active", debug: { ...state.debug, subtitleItems: result.subtitleItems || [] } };
     render();
     const analyzed = await send({ type: "ANALYZE", bvid: identity.bvid || `aid-${identity.aid}`, cacheKey: `${identity.key}:local`, timeline: result.timeline, duration: video?.duration, force: true });
-    state = { ...state, analysis: analyzed.status === "completed" ? `已完成（${analyzed.segments.length} 段）` : analyzed.error || "分析失败", progress: analyzed.status === "completed" ? 100 : 90, progressLabel: analyzed.status === "completed" ? "分析完成" : "流程未完成", progressState: analyzed.status === "completed" ? "completed" : "failed", segments: analyzed.segments || [], debug: { ...state.debug, request: analyzed.requestDebug || "", response: analyzed.responseDebug || "" } };
+    if (currentBvid !== identity.key || getVideoIdentity().key !== identity.key) return;
+    state = { ...state, analysis: analyzed.status === "completed" ? `已完成（${analyzed.segments.length} 段）` : analyzed.error || "分析失败", progress: analyzed.status === "completed" ? 100 : 90, progressLabel: analyzed.status === "completed" ? "分析完成" : "流程未完成", progressState: analyzed.status === "completed" ? "completed" : "failed", segments: analyzed.segments || [], debug: { ...state.debug, request: analyzed.requestDebug || "", response: analyzed.responseDebug || "", reasoning: analyzed.reasoningDebug || "" } };
     render();
   }
 
@@ -367,7 +412,16 @@
     const runId = analysisRunId;
     currentBvid = key;
     skipped = new Set();
-    state = { ...state, subtitle: "等待播放器准备", analysis: "等待播放器加载", progress: 15, progressLabel: "正在等待播放器加载", progressState: "active", segments: [], debug: null, localPrompt: false };
+    state = { ...state, subtitle: "检查跳过名单", analysis: "正在检查投稿用户", progress: 10, progressLabel: "正在检查跳过名单", progressState: "active", segments: [], debug: { uploaderId: identity.uploaderId || "" }, localPrompt: false };
+    render();
+    if (await isUploaderSkipped(identity)) {
+      if (!isCurrentAnalysisRun(runId, key)) return;
+      state = { ...state, subtitle: "已跳过", analysis: "投稿用户 MID 已在跳过名单中", progress: 100, progressLabel: "已按跳过名单停止分析", progressState: "completed", segments: [], localPrompt: false };
+      render();
+      return;
+    }
+    if (!isCurrentAnalysisRun(runId, key)) return;
+    state = { ...state, subtitle: "等待播放器准备", analysis: "等待播放器加载", progress: 15, progressLabel: "正在等待播放器加载", progressState: "active" };
     render();
     const model = await send({ type: "GET_MODEL" });
     if (!isCurrentAnalysisRun(runId, key)) return;
@@ -384,7 +438,16 @@
     }
     if (!isCurrentAnalysisRun(runId, key) || !document.querySelector(PLAYER_READY_SELECTOR)) return;
 
-    state = { ...state, subtitle: "检测字幕中", analysis: "等待字幕控件加载", progressLabel: "正在检测播放器字幕", progressState: "active" };
+    const refreshedIdentity = getVideoIdentity();
+    if (await isUploaderSkipped(refreshedIdentity)) {
+      if (!isCurrentAnalysisRun(runId, key)) return;
+      state = { ...state, subtitle: "已跳过", analysis: "投稿用户 MID 已在跳过名单中", progress: 100, progressLabel: "已按跳过名单停止分析", progressState: "completed", segments: [], debug: { uploaderId: refreshedIdentity.uploaderId || "" }, localPrompt: false };
+      render();
+      return;
+    }
+    if (!isCurrentAnalysisRun(runId, key)) return;
+
+    state = { ...state, subtitle: "检测字幕中", analysis: "等待字幕控件加载", progressLabel: "正在检测播放器字幕", progressState: "active", debug: { ...state.debug, uploaderId: refreshedIdentity.uploaderId || "" } };
     render();
     const subtitleControl = await waitForElement(SUBTITLE_CONTROL_SELECTOR, SUBTITLE_CONTROL_WAIT_TIMEOUT, runId, key);
     if (subtitleControl.status === "cancelled") return;
@@ -402,14 +465,14 @@
     if (!isCurrentAnalysisRun(runId, key)) return;
     if (subtitles.status !== "ready") {
       if (subtitles.status === "no-subtitles") {
-        state = { ...state, subtitle: "没有可用字幕", analysis: "等待选择本机识别", progress: 20, progressLabel: "请确认是否使用本机语音识别", progressState: "active", localPrompt: true, debug: { subtitle: subtitles.debug || "" } };
+        state = { ...state, subtitle: "没有可用字幕", analysis: "等待选择本机识别", progress: 20, progressLabel: "请确认是否使用本机语音识别", progressState: "active", localPrompt: true, debug: { ...state.debug, subtitle: subtitles.debug || "" } };
       } else {
-        state = { ...state, subtitle: "获取失败", analysis: subtitles.error || "无法分析", progressLabel: "流程未完成", progressState: "failed", debug: { subtitle: subtitles.debug || subtitles.error || "" } };
+        state = { ...state, subtitle: "获取失败", analysis: subtitles.error || "无法分析", progressLabel: "流程未完成", progressState: "failed", debug: { ...state.debug, subtitle: subtitles.debug || subtitles.error || "" } };
       }
       render();
       return;
     }
-    state = { ...state, subtitle: `已获取（${subtitles.subtitleName}）`, analysis: "分析中", progress: 70, progressLabel: "正在等待模型分析", progressState: "active", debug: { subtitleItems: subtitles.subtitleItems || [] } };
+    state = { ...state, subtitle: `已获取（${subtitles.subtitleName}）`, analysis: "分析中", progress: 70, progressLabel: "正在等待模型分析", progressState: "active", debug: { ...state.debug, subtitleItems: subtitles.subtitleItems || [] } };
     render();
     const video = document.querySelector("video");
     const result = await send({ type: "ANALYZE", bvid: bvid || `aid-${identity.aid}`, cacheKey: key, timeline: subtitles.timeline, duration: video?.duration, force });
@@ -423,7 +486,7 @@
       progressLabel: result.status === "completed" ? "分析完成" : "流程未完成",
       progressState: result.status === "completed" ? "completed" : "failed",
       segments: result.segments || [],
-      debug: { ...state.debug, request: result.requestDebug || "", response: result.responseDebug || "" }
+      debug: { ...state.debug, request: result.requestDebug || "", response: result.responseDebug || "", reasoning: result.reasoningDebug || "" }
     };
     render();
   }
