@@ -78,6 +78,89 @@ const LOCAL_REQUEST_TIMEOUT = 10000;
 const LOCAL_STATUS_TIMEOUT = 10000;
 const LOCAL_TOTAL_TIMEOUT = 15 * 60 * 1000;
 const LOCAL_POLL_INTERVAL = 1200;
+const UPLOADER_PROFILE_CACHE_KEY = "uploaderProfileCache";
+const UPLOADER_PROFILE_CACHE_TTL = 7 * 24 * 60 * 60 * 1000;
+const UPLOADER_PROFILE_FAILURE_RETRY_DELAY = 15 * 60 * 1000;
+const UPLOADER_PROFILE_REQUEST_TIMEOUT = 10000;
+const uploaderProfileRequests = new Map();
+
+function normalizeUploaderMid(value) {
+  const trimmed = String(value ?? "").trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const normalized = trimmed.replace(/^0+/, "");
+  return normalized || null;
+}
+
+async function readUploaderProfileCache() {
+  const stored = await chrome.storage.local.get(UPLOADER_PROFILE_CACHE_KEY);
+  const cache = stored[UPLOADER_PROFILE_CACHE_KEY];
+  return cache && typeof cache === "object" && !Array.isArray(cache) ? cache : {};
+}
+
+async function fetchUploaderProfile(mid) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPLOADER_PROFILE_REQUEST_TIMEOUT);
+  try {
+    const response = await fetch(`https://api.bilibili.com/x/web-interface/card?mid=${encodeURIComponent(mid)}`, { credentials: "omit", signal: controller.signal });
+    if (response.status === 429) throw new Error("B 站请求过于频繁，请稍后刷新。");
+    if (!response.ok) throw new Error("暂时无法获取昵称。");
+    const payload = await response.json();
+    const card = payload?.data?.card;
+    const name = typeof card?.name === "string" ? card.name.trim() : "";
+    if (payload?.code !== 0 || normalizeUploaderMid(card?.mid) !== mid || !name) throw new Error("未找到该 MID 对应的用户。");
+    return { mid, name };
+  } catch (error) {
+    if (error.name === "AbortError") throw new Error("查询昵称超时，请稍后刷新。");
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function getUploaderProfiles(values, forceRefresh = false) {
+  const mids = [...new Set((Array.isArray(values) ? values : []).map(normalizeUploaderMid).filter(Boolean))].slice(0, 100);
+  const cache = await readUploaderProfileCache();
+  const now = Date.now();
+  const profiles = {};
+  const pending = [];
+
+  for (const mid of mids) {
+    const entry = cache[mid];
+    if (!forceRefresh && entry?.name && entry.expiresAt > now) {
+      profiles[mid] = { status: "cached", name: entry.name };
+    } else if (!forceRefresh && entry?.error && entry.retryAfter > now) {
+      profiles[mid] = { status: "error", error: entry.error };
+    } else {
+      if (entry?.name) profiles[mid] = { status: "stale", name: entry.name, error: "昵称待刷新。" };
+      pending.push(mid);
+    }
+  }
+
+  const fetchOne = async (mid) => {
+    let request = uploaderProfileRequests.get(mid);
+    if (!request) {
+      request = fetchUploaderProfile(mid);
+      uploaderProfileRequests.set(mid, request);
+      request.finally(() => uploaderProfileRequests.delete(mid)).catch(() => {});
+    }
+    try {
+      const { name } = await request;
+      cache[mid] = { name, fetchedAt: now, expiresAt: now + UPLOADER_PROFILE_CACHE_TTL };
+      profiles[mid] = { status: "ready", name };
+    } catch (error) {
+      const message = error.message || "暂时无法获取昵称。";
+      cache[mid] = cache[mid]?.name ? { ...cache[mid], error: message, retryAfter: now + UPLOADER_PROFILE_FAILURE_RETRY_DELAY } : { error: message, retryAfter: now + UPLOADER_PROFILE_FAILURE_RETRY_DELAY };
+      profiles[mid] = cache[mid]?.name ? { status: "stale", name: cache[mid].name, error: message } : { status: "error", error: message };
+    }
+  };
+
+  const workers = Array.from({ length: Math.min(3, pending.length) }, async () => {
+    while (pending.length) await fetchOne(pending.shift());
+  });
+  await Promise.all(workers);
+  await chrome.storage.local.set({ [UPLOADER_PROFILE_CACHE_KEY]: cache });
+  return { status: "completed", profiles };
+}
 
 function apiUrl(path) {
   return path.startsWith("//") ? `https:${path}` : path;
@@ -264,6 +347,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message.type === "OPEN_OPTIONS") {
     chrome.runtime.openOptionsPage().then(() => sendResponse({ status: "opened" })).catch((error) => sendResponse({ status: "failed", error: error.message || "无法打开扩展设置页。" }));
+    return true;
+  }
+  if (message.type === "GET_UPLOADER_PROFILES") {
+    getUploaderProfiles(message.mids, Boolean(message.forceRefresh)).then(sendResponse).catch(() => sendResponse({ status: "failed", error: "查询昵称服务暂时不可用。" }));
     return true;
   }
   if (message.type === "ANALYZE") {

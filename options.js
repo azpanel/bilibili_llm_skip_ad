@@ -84,6 +84,8 @@ const tabs = [...document.querySelectorAll("[role=tab]")];
 const panels = [...document.querySelectorAll("[role=tabpanel]")];
 let skippedUploaderMids = [];
 let editingSkipMid = null;
+let uploaderProfiles = new Map();
+let loadingUploaderMids = new Set();
 
 function normalizeUploaderMid(value) {
   const trimmed = String(value ?? "").trim();
@@ -108,11 +110,9 @@ function activateTab(tabId, moveFocus = false) {
     tab.setAttribute("aria-selected", String(selected));
     tab.tabIndex = selected ? 0 : -1;
   });
-
   panels.forEach((panel) => {
     panel.hidden = panel.dataset.panel !== tabId;
   });
-
   if (moveFocus) tabs.find((tab) => tab.dataset.tab === tabId)?.focus();
 }
 
@@ -127,15 +127,49 @@ function setSkipMidError(message = "") {
   else skipMidInput.removeAttribute("aria-invalid");
 }
 
-async function saveSkippedUploaderMids() {
+function getStorageErrorMessage(error) {
+  return error instanceof Error && error.message ? error.message : "请检查扩展存储权限后重试。";
+}
+
+async function persistSkippedUploaderMids(nextMids) {
   try {
-    await chrome.storage.sync.set({ [SKIPPED_UPLOADER_MIDS_KEY]: skippedUploaderMids });
-    setStatus("跳过用户名单已保存。", "success");
+    await chrome.storage.sync.set({ [SKIPPED_UPLOADER_MIDS_KEY]: nextMids });
     return true;
   } catch (error) {
     setStatus(`保存跳过用户名单失败：${getStorageErrorMessage(error)}`, "error");
     return false;
   }
+}
+
+async function loadUploaderProfiles(mids, forceRefresh = false) {
+  const requestedMids = mids.filter((mid) => skippedUploaderMids.includes(mid));
+  if (!requestedMids.length) return;
+  requestedMids.forEach((mid) => loadingUploaderMids.add(mid));
+  renderSkippedUploaderMids();
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "GET_UPLOADER_PROFILES", mids: requestedMids, forceRefresh });
+    if (result?.status !== "completed") throw new Error(result?.error || "暂时无法获取昵称。");
+    Object.entries(result.profiles || {}).forEach(([mid, profile]) => {
+      if (skippedUploaderMids.includes(mid)) uploaderProfiles.set(mid, profile);
+    });
+  } catch (error) {
+    requestedMids.forEach((mid) => {
+      if (skippedUploaderMids.includes(mid) && !uploaderProfiles.get(mid)?.name) uploaderProfiles.set(mid, { status: "error", error: "暂时无法获取昵称。" });
+    });
+  } finally {
+    requestedMids.forEach((mid) => loadingUploaderMids.delete(mid));
+    renderSkippedUploaderMids();
+  }
+}
+
+function createActionButton(label, className, onClick, disabled = false) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = className;
+  button.textContent = label;
+  button.disabled = disabled;
+  button.addEventListener("click", onClick);
+  return button;
 }
 
 function renderSkippedUploaderMids() {
@@ -149,55 +183,83 @@ function renderSkippedUploaderMids() {
   }
 
   skippedUploaderMids.forEach((mid) => {
+    const profile = uploaderProfiles.get(mid);
+    const loading = loadingUploaderMids.has(mid);
     const item = document.createElement("li");
-    item.className = "skip-mid-item";
+    item.className = "skip-uploader-item";
+
+    const identity = document.createElement("div");
+    identity.className = "skip-uploader-identity";
+    const badge = document.createElement("span");
+    badge.className = "skip-uploader-badge";
+    badge.textContent = "UP";
+    badge.setAttribute("aria-hidden", "true");
+    const copy = document.createElement("div");
+    copy.className = "skip-uploader-copy";
+    const name = document.createElement("strong");
+    name.className = "skip-uploader-name";
+    name.textContent = profile?.name || (loading ? "正在查询昵称…" : "昵称暂不可用");
+    const midText = document.createElement("span");
+    midText.className = "skip-uploader-mid";
+    midText.textContent = `MID ${mid}`;
+    copy.append(name, midText);
+    if (profile?.error) {
+      const feedback = document.createElement("span");
+      feedback.className = "skip-uploader-feedback";
+      feedback.textContent = profile.error;
+      copy.append(feedback);
+    }
+    identity.append(badge, copy);
+
+    const actions = document.createElement("div");
+    actions.className = "skip-uploader-actions";
+    if (editingSkipMid !== mid) {
+      actions.append(
+        createActionButton("刷新", "skip-uploader-action", () => loadUploaderProfiles([mid], true), loading),
+        createActionButton("编辑", "skip-uploader-action", () => {
+          editingSkipMid = mid;
+          renderSkippedUploaderMids();
+          requestAnimationFrame(() => skipMidList.querySelector(`[data-edit-mid="${mid}"]`)?.focus());
+        }, loading),
+        createActionButton("删除", "skip-uploader-delete", () => removeSkippedUploaderMid(mid), loading)
+      );
+    }
+    item.append(identity, actions);
+
     if (editingSkipMid === mid) {
+      const editForm = document.createElement("div");
+      editForm.className = "skip-uploader-edit-form";
+      const label = document.createElement("label");
+      label.textContent = "新 MID";
       const input = document.createElement("input");
       input.type = "text";
       input.inputMode = "numeric";
       input.autocomplete = "off";
       input.value = mid;
-      input.setAttribute("aria-label", "投稿用户 MID");
-      const save = document.createElement("button");
-      save.type = "button";
-      save.textContent = "确定";
-      save.addEventListener("click", () => updateSkippedUploaderMid(mid, input.value));
-      const cancel = document.createElement("button");
-      cancel.type = "button";
-      cancel.className = "skip-mid-secondary";
-      cancel.textContent = "取消";
-      cancel.addEventListener("click", () => {
+      input.dataset.editMid = mid;
+      input.setAttribute("aria-label", "新的投稿用户 MID");
+      const error = document.createElement("span");
+      error.className = "skip-uploader-edit-error";
+      const save = createActionButton("保存", "skip-uploader-save", () => updateSkippedUploaderMid(mid, input.value, error));
+      const cancel = createActionButton("取消", "skip-uploader-action", () => {
         editingSkipMid = null;
         renderSkippedUploaderMids();
       });
-      item.append(input, save, cancel);
-    } else {
-      const value = document.createElement("code");
-      value.textContent = mid;
-      const edit = document.createElement("button");
-      edit.type = "button";
-      edit.className = "skip-mid-secondary";
-      edit.textContent = "编辑";
-      edit.addEventListener("click", () => {
-        editingSkipMid = mid;
-        renderSkippedUploaderMids();
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") updateSkippedUploaderMid(mid, input.value, error);
+        if (event.key === "Escape") {
+          editingSkipMid = null;
+          renderSkippedUploaderMids();
+        }
       });
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "skip-mid-delete";
-      remove.textContent = "删除";
-      remove.addEventListener("click", async () => {
-        skippedUploaderMids = skippedUploaderMids.filter((itemMid) => itemMid !== mid);
-        renderSkippedUploaderMids();
-        await saveSkippedUploaderMids();
-      });
-      item.append(value, edit, remove);
+      editForm.append(label, input, save, cancel, error);
+      item.append(editForm);
     }
     skipMidList.append(item);
   });
 }
 
-function addSkippedUploaderMid() {
+async function addSkippedUploaderMid() {
   const mid = normalizeUploaderMid(skipMidInput.value);
   if (!mid) {
     setSkipMidError("请输入有效的投稿用户 MID。");
@@ -209,30 +271,47 @@ function addSkippedUploaderMid() {
     skipMidInput.focus();
     return;
   }
-  skippedUploaderMids.push(mid);
+  const nextMids = [...skippedUploaderMids, mid];
+  if (!await persistSkippedUploaderMids(nextMids)) return;
+  skippedUploaderMids = nextMids;
   skipMidInput.value = "";
   setSkipMidError();
+  setStatus("跳过用户名单已保存。", "success");
+  loadUploaderProfiles([mid]);
   renderSkippedUploaderMids();
-  saveSkippedUploaderMids();
 }
 
-function updateSkippedUploaderMid(previousMid, value) {
+async function updateSkippedUploaderMid(previousMid, value, errorElement) {
   const mid = normalizeUploaderMid(value);
   if (!mid) {
-    setSkipMidError("请输入有效的投稿用户 MID。");
-    activateTab("skip-users");
+    errorElement.textContent = "请输入有效的投稿用户 MID。";
     return;
   }
   if (mid !== previousMid && skippedUploaderMids.includes(mid)) {
-    setSkipMidError("该 MID 已在跳过名单中。");
-    activateTab("skip-users");
+    errorElement.textContent = "该 MID 已在跳过名单中。";
     return;
   }
-  skippedUploaderMids = skippedUploaderMids.map((itemMid) => itemMid === previousMid ? mid : itemMid);
+  const nextMids = skippedUploaderMids.map((itemMid) => itemMid === previousMid ? mid : itemMid);
+  if (!await persistSkippedUploaderMids(nextMids)) {
+    errorElement.textContent = "保存失败，未更改 MID。";
+    return;
+  }
+  skippedUploaderMids = nextMids;
+  uploaderProfiles.delete(previousMid);
   editingSkipMid = null;
-  setSkipMidError();
+  setStatus("跳过用户名单已保存。", "success");
+  loadUploaderProfiles([mid]);
   renderSkippedUploaderMids();
-  saveSkippedUploaderMids();
+}
+
+async function removeSkippedUploaderMid(mid) {
+  const nextMids = skippedUploaderMids.filter((itemMid) => itemMid !== mid);
+  if (!await persistSkippedUploaderMids(nextMids)) return;
+  skippedUploaderMids = nextMids;
+  uploaderProfiles.delete(mid);
+  loadingUploaderMids.delete(mid);
+  setStatus("跳过用户名单已保存。", "success");
+  renderSkippedUploaderMids();
 }
 
 function setSaveState(saving) {
@@ -254,10 +333,6 @@ function clearFieldError(input) {
 
 function updateKeyHint(apiKey) {
   hint.textContent = apiKey ? `已保存密钥（末四位：${apiKey.slice(-4)}）。如不修改可留空。` : "尚未保存 API Key。";
-}
-
-function getStorageErrorMessage(error) {
-  return error instanceof Error && error.message ? error.message : "请检查扩展存储权限后重试。";
 }
 
 tabs.forEach((tab, index) => {
@@ -293,6 +368,7 @@ try {
   promptInput.value = sync.prompt || DEFAULT_PROMPT;
   skippedUploaderMids = normalizeSkippedUploaderMids(sync[SKIPPED_UPLOADER_MIDS_KEY]);
   renderSkippedUploaderMids();
+  loadUploaderProfiles(skippedUploaderMids);
   updateKeyHint(local.openRouterApiKey);
 } catch (error) {
   modelInput.value = "deepseek/deepseek-chat";
@@ -307,7 +383,6 @@ form.addEventListener("submit", async (event) => {
   const model = modelInput.value.trim();
   const prompt = promptInput.value.trim();
   const apiKey = keyInput.value.trim();
-
   if (!model) {
     showFieldError(modelInput, "connection", "请填写模型名称。");
     return;
@@ -316,7 +391,6 @@ form.addEventListener("submit", async (event) => {
     showFieldError(promptInput, "rules", "请填写识别广告提示词。");
     return;
   }
-
   setSaveState(true);
   setStatus("正在保存设置…");
   try {

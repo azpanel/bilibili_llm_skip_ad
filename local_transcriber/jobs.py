@@ -35,6 +35,7 @@ class Job:
     created_at: float = field(default_factory=time.time)
     task: asyncio.Task | None = None
     directory: Path | None = None
+    processing_started_at: float | None = None
 
 
 class JobManager:
@@ -43,6 +44,10 @@ class JobManager:
         self.lock = asyncio.Lock()
         self.worker = asyncio.Semaphore(1)
         self.transcriber = Transcriber(model_name=model_name)
+        self.received_jobs = 0
+        self.received_audio_seconds = 0.0
+        self.completed_processing_seconds = 0.0
+        self.completed_audio_seconds = 0.0
         logger.info("转录器配置：模型=%s，设备=%s，计算类型=%s，beam_size=%d，设备索引=%d，workers=%d", self.transcriber.model_name, self.transcriber.device, self.transcriber.compute_type, self.transcriber.beam_size, self.transcriber.device_index, self.transcriber.num_workers)
 
     async def create(self, request: dict) -> Job:
@@ -59,8 +64,23 @@ class JobManager:
     def _create(self, request: dict) -> Job:
         job = Job(uuid.uuid4().hex, request)
         self.jobs[job.id] = job
+        self.received_jobs += 1
+        self.received_audio_seconds += self._audio_duration(job)
         job.task = asyncio.create_task(self._run(job))
         return job
+
+    @staticmethod
+    def _audio_duration(job: Job) -> float:
+        return float(job.request.get("video", {}).get("duration") or 0)
+
+    def statistics(self) -> dict:
+        efficiency = self.completed_audio_seconds / self.completed_processing_seconds if self.completed_processing_seconds else 0
+        return {
+            "received_jobs": self.received_jobs,
+            "received_audio_seconds": self.received_audio_seconds,
+            "completed_processing_seconds": self.completed_processing_seconds,
+            "efficiency": efficiency,
+        }
 
     async def get(self, job_id: str) -> Job | None:
         async with self.lock:
@@ -99,6 +119,7 @@ class JobManager:
         try:
             logger.info("任务 %s 开始，候选音频 %d 个", job.id, len(job.request["audio"]["urls"]))
             async with self.worker:
+                job.processing_started_at = time.time()
                 job.status, job.message, job.progress = "downloading", "正在下载音频", 5
                 errors = []
                 for index, audio_url in enumerate(job.request["audio"]["urls"], 1):
@@ -117,6 +138,8 @@ class JobManager:
                 logger.info("任务 %s 开始 FFmpeg 转码和模型识别", job.id)
                 segments = await self.transcriber.run(source, wav, job.request.get("options", {}).get("language", "zh"), self._transcribe_progress(job))
                 job.status, job.message, job.progress = "completed", "识别完成", 100
+                self.completed_processing_seconds += time.time() - job.processing_started_at
+                self.completed_audio_seconds += self._audio_duration(job)
                 logger.info("任务 %s 识别完成，共 %d 段", job.id, len(segments))
                 job.result = {"duration": job.request.get("video", {}).get("duration"), "language": "zh", "segments": segments}
         except asyncio.CancelledError:

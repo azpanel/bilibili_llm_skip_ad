@@ -26,14 +26,29 @@ class DashboardHandler(logging.Handler):
 class Dashboard:
     def __init__(self):
         self.lines = {"transcription": [], "http": []}
+        self.statistics_provider = None
         self.live = Live(self.render(), refresh_per_second=5, screen=False)
         self.handlers = []
+
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        seconds = round(seconds)
+        return f"{seconds // 3600}小时{seconds % 3600 // 60}分{seconds % 60}秒"
 
     def render(self):
         transcription = Text("\n".join(self.lines["transcription"]) or "等待识别任务…", overflow="ellipsis")
         http = Text("\n".join(self.lines["http"]) or "等待 HTTP 请求…", overflow="ellipsis")
+        stats = self.statistics_provider() if self.statistics_provider else {}
+        statistics = Text(
+            f"收到任务：{stats.get('received_jobs', 0)} 个  |  音频总时长：{self._format_duration(stats.get('received_audio_seconds', 0))}\n"
+            f"已完成处理：{self._format_duration(stats.get('completed_processing_seconds', 0))}  |  平均处理效率：{stats.get('efficiency', 0):.2f} 倍速"
+        )
         layout = Layout(name="root")
-        layout.split_column(Layout(Panel(transcription, title="语音识别", border_style="cyan"), name="transcription", ratio=2), Layout(Panel(http, title="HTTP 请求", border_style="green"), name="http", ratio=1))
+        layout.split_column(
+            Layout(Panel(transcription, title="语音识别", border_style="cyan"), name="transcription", ratio=2),
+            Layout(Panel(http, title="HTTP 请求", border_style="green"), name="http", ratio=1),
+            Layout(Panel(statistics, title="任务统计", border_style="yellow"), name="statistics", size=4),
+        )
         return layout
 
     def add(self, name, message):
@@ -74,6 +89,7 @@ TOKEN = os.getenv("BILI_TRANSCRIBER_TOKEN", "")
 MODEL = os.getenv("BILI_TRANSCRIBER_MODEL", "small")
 MAX_ACTIVE_JOBS = 4
 manager = JobManager(MODEL)
+_dashboard.statistics_provider = manager.statistics
 
 
 class Audio(BaseModel):

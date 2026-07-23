@@ -219,7 +219,7 @@ code {
 }
 
 .skip-mid-add-row button,
-.skip-mid-item button {
+.skip-uploader-save {
   flex: 0 0 auto;
   border: 1px solid var(--color-primary);
   border-radius: 8px;
@@ -231,59 +231,142 @@ code {
 }
 
 .skip-mid-add-row button:hover,
-.skip-mid-item button:hover {
+.skip-uploader-save:hover {
   background: var(--color-primary-dark);
 }
 
 .skip-mid-list {
   display: grid;
-  gap: 8px;
+  gap: 10px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.skip-mid-item {
-  display: flex;
+.skip-uploader-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  min-height: 46px;
+  gap: 12px;
   border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: #f8fafc;
-  padding: 7px 9px;
+  border-radius: 10px;
+  background: #fff;
+  padding: 12px 14px;
+  transition: border-color .18s ease, box-shadow .18s ease;
 }
 
-.skip-mid-item code {
+.skip-uploader-item:hover {
+  border-color: #bfdbfe;
+  box-shadow: 0 3px 10px rgb(15 23 42 / 5%);
+}
+
+.skip-uploader-item > :first-child {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.skip-uploader-identity {
+  min-width: 0;
   flex: 1;
+}
+
+.skip-uploader-badge {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: #eef2f7;
+  color: #47637f;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.skip-uploader-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.skip-uploader-name {
   overflow: hidden;
+  color: var(--color-text);
+  font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.skip-mid-item input {
-  flex: 1;
-  min-width: 0;
+.skip-uploader-mid {
+  color: var(--color-muted);
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
-.skip-mid-item .skip-mid-secondary {
-  border-color: var(--color-input-border);
+.skip-uploader-feedback,
+.skip-uploader-edit-error {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.skip-uploader-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.skip-uploader-action,
+.skip-uploader-delete {
+  border: 1px solid var(--color-input-border);
+  border-radius: 7px;
   background: #fff;
   color: var(--color-text);
+  cursor: pointer;
+  padding: 5px 8px;
+  font-size: 12px;
 }
 
-.skip-mid-item .skip-mid-secondary:hover {
-  background: #eff6ff;
+.skip-uploader-action:hover:not(:disabled) {
+  border-color: #93c5fd;
+  color: var(--color-primary-dark);
 }
 
-.skip-mid-item .skip-mid-delete {
+.skip-uploader-delete {
   border-color: #fecaca;
-  background: #fff1f2;
   color: var(--color-error);
 }
 
-.skip-mid-item .skip-mid-delete:hover {
-  background: #fee2e2;
+.skip-uploader-delete:hover:not(:disabled) {
+  background: #fef2f2;
+}
+
+.skip-uploader-action:disabled,
+.skip-uploader-delete:disabled {
+  cursor: wait;
+  opacity: .55;
+}
+
+.skip-uploader-edit-form {
+  display: grid;
+  grid-template-columns: auto minmax(140px, 220px) auto auto;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 0 44px;
+  padding-top: 10px;
+  border-top: 1px solid #edf1f6;
+}
+
+.skip-uploader-edit-form label {
+  font-size: 13px;
+}
+
+.skip-uploader-edit-form input {
+  min-width: 0;
+}
+
+.skip-uploader-edit-error {
+  grid-column: 2 / -1;
+  color: var(--color-error);
 }
 
 .skip-mid-empty {
@@ -292,6 +375,14 @@ code {
   color: var(--color-muted);
   padding: 12px;
   text-align: center;
+}
+
+.skip-uploader-action:focus-visible,
+.skip-uploader-delete:focus-visible,
+.skip-uploader-save:focus-visible,
+.skip-mid-add-row button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 .form-actions {
@@ -380,14 +471,32 @@ code {
     width: 100%;
   }
 
-  .skip-mid-add-row,
-  .skip-mid-item {
+  .skip-mid-add-row {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .skip-mid-item button {
-    width: 100%;
+  .skip-uploader-item {
+    grid-template-columns: 1fr;
+  }
+
+  .skip-uploader-item > :first-child {
+    align-items: flex-start;
+  }
+
+  .skip-uploader-actions {
+    margin-left: 44px;
+  }
+
+  .skip-uploader-edit-form {
+    grid-template-columns: 1fr 1fr;
+    margin-left: 0;
+  }
+
+  .skip-uploader-edit-form label,
+  .skip-uploader-edit-form input,
+  .skip-uploader-edit-error {
+    grid-column: 1 / -1;
   }
 }
 
