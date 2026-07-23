@@ -11,13 +11,19 @@
   let cancelElementWait = null;
   const PANEL_LAYOUT_KEY = "panelLayout";
   const SKIPPED_UPLOADER_MIDS_KEY = "skippedUploaderMids";
-  let state = { subtitle: "等待视频", analysis: "未开始", model: "读取中", progress: 0, progressLabel: "", progressState: "idle", transcription: null, segments: [], debug: null, autoSkip: true, localPrompt: false, debugOpen: false };
+  const AUTO_APPROVE_LOCAL_TRANSCRIPTION_KEY = "autoApproveLocalTranscription";
+  let state = { subtitle: "等待视频", analysis: "未开始", model: "读取中", progress: 0, progressLabel: "", progressState: "idle", transcription: null, segments: [], debug: null, autoSkip: true, autoApproveLocalTranscription: false, localPrompt: false, debugOpen: false };
   let localRequestId = null;
+  let localTranscriptionRunId = 0;
+  let activeLocalTranscription = null;
+  let preferenceRevision = 0;
+  let preferencesReady = Promise.resolve();
   let renderedSegmentsKey = null;
   let skipped = new Set();
 
   chrome.runtime.onMessage.addListener((message) => {
-    if (message.type !== "LOCAL_TRANSCRIPTION_PROGRESS" || message.requestId !== localRequestId) return;
+    const activeRun = activeLocalTranscription;
+    if (message.type !== "LOCAL_TRANSCRIPTION_PROGRESS" || message.requestId !== localRequestId || !activeRun || !isCurrentAnalysisRun(activeRun.runId, activeRun.key)) return;
     if (message.status === "completed") {
       state = { ...state, transcription: null, subtitle: "字幕生成完成", analysis: "分析中", progress: 70, progressLabel: "正在等待模型分析", progressState: "active" };
     } else {
@@ -84,6 +90,9 @@
 
   function invalidateAnalysisRun() {
     analysisRunId += 1;
+    localTranscriptionRunId += 1;
+    localRequestId = null;
+    activeLocalTranscription = null;
     cancelElementWait?.();
     cancelElementWait = null;
   }
@@ -187,6 +196,8 @@
     panel.querySelector("#bili-ai-local-prompt").hidden = !state.localPrompt;
     const autoSkip = panel.querySelector("#bili-ai-auto");
     if (autoSkip.checked !== state.autoSkip) autoSkip.checked = state.autoSkip;
+    const autoApproveLocal = panel.querySelector("#bili-ai-auto-approve-local");
+    if (autoApproveLocal.checked !== state.autoApproveLocalTranscription) autoApproveLocal.checked = state.autoApproveLocalTranscription;
     panel.querySelector("#bili-ai-debug-view").hidden = !state.debugOpen;
     renderSubtitleDebug(panel.querySelector("#bili-ai-debug-subtitle"), state.debug?.subtitleItems, state.debug?.subtitle);
     panel.querySelector("#bili-ai-debug-audio").textContent = state.debug?.audioUrls?.length ? state.debug.audioUrls.join("\n\n") : "尚未解析到音频文件。";
@@ -221,8 +232,14 @@
 
   function bindPanelEvents(panel) {
     panel.querySelector("#bili-ai-auto").addEventListener("change", (event) => { state.autoSkip = event.target.checked; });
+    panel.querySelector("#bili-ai-auto-approve-local").addEventListener("change", (event) => {
+      preferenceRevision += 1;
+      state = { ...state, autoApproveLocalTranscription: event.target.checked };
+      render();
+      chrome.storage.local.set({ [AUTO_APPROVE_LOCAL_TRANSCRIPTION_KEY]: event.target.checked }).catch(() => {});
+    });
     panel.querySelector("#bili-ai-retry").addEventListener("click", () => startAnalysis(true));
-    panel.querySelector("#bili-ai-local-confirm").addEventListener("click", () => runLocalTranscription());
+    panel.querySelector("#bili-ai-local-confirm").addEventListener("click", () => runLocalTranscription(analysisRunId, currentBvid));
     panel.querySelector("#bili-ai-local-cancel").addEventListener("click", () => {
       state = { ...state, localPrompt: false, analysis: "已取消本次本机识别", progressState: "failed", progressLabel: "流程已取消" };
       render();
@@ -323,6 +340,15 @@
     panel.style.bottom = "auto";
   }
 
+  function restoreAutoApprovePreference() {
+    const revision = preferenceRevision;
+    preferencesReady = chrome.storage.local.get(AUTO_APPROVE_LOCAL_TRANSCRIPTION_KEY).then((stored) => {
+      if (preferenceRevision !== revision) return;
+      state = { ...state, autoApproveLocalTranscription: stored[AUTO_APPROVE_LOCAL_TRANSCRIPTION_KEY] === true };
+      render();
+    }).catch(() => {});
+  }
+
   function ensurePanel() {
     if (document.getElementById(PANEL_ID)) return;
     const panel = document.createElement("section");
@@ -336,7 +362,7 @@
       <section id="bili-ai-transcription" class="bili-ai-transcription" aria-live="polite"><div class="bili-ai-transcription-heading"><b>语音转文本</b><span id="bili-ai-transcription-percent"></span></div><div class="bili-ai-progress-track"><i id="bili-ai-transcription-fill" class="bili-ai-progress-fill bili-ai-progress-active"></i></div><small id="bili-ai-transcription-meta"></small></section>
       <section id="bili-ai-local-prompt" class="bili-ai-local-prompt" aria-live="polite"><b>当前视频没有可用字幕</b><p>是否允许在本机使用语音识别？音频仅发送到本机服务；识别后的字幕仍会发送给你配置的 OpenRouter。</p><div><button id="bili-ai-local-confirm">仅本次识别</button><button id="bili-ai-local-cancel">取消</button></div></section>
       <div class="bili-ai-status"><span>模型</span><strong id="bili-ai-model" class="bili-ai-model"></strong></div>
-      <label class="bili-ai-toggle"><input id="bili-ai-auto" type="checkbox"> 自动跳过</label>
+      <div class="bili-ai-toggles"><label class="bili-ai-toggle"><input id="bili-ai-auto" type="checkbox"> 自动跳过</label><label class="bili-ai-toggle"><input id="bili-ai-auto-approve-local" type="checkbox"> 自动批准识别</label></div>
       <div class="bili-ai-actions"><button id="bili-ai-retry">重新分析</button><button id="bili-ai-debug">调试信息</button></div>
       <div id="bili-ai-segments" class="bili-ai-segments"></div>
       <section id="bili-ai-debug-view" class="bili-ai-debug"><details open><summary>投稿用户 MID</summary><pre id="bili-ai-debug-uploader"></pre></details><details><summary>字幕获取</summary><div id="bili-ai-debug-subtitle"></div></details><details><summary>音频文件</summary><pre id="bili-ai-debug-audio"></pre></details><details><summary>AI 请求</summary><pre id="bili-ai-debug-request"></pre></details><details><summary>AI 响应</summary><pre id="bili-ai-debug-response"></pre></details><details><summary>模型推理（reasoning）</summary><pre id="bili-ai-debug-reasoning"></pre></details></section>
@@ -348,20 +374,38 @@
     bindPanelLayout(panel);
     render();
     restorePanelLayout(panel);
+    restoreAutoApprovePreference();
   }
 
-  async function runLocalTranscription(force = false) {
+  async function handleNoSubtitles(runId, key, subtitleDebug = "") {
+    await preferencesReady;
+    if (!isCurrentAnalysisRun(runId, key)) return;
+    if (state.autoApproveLocalTranscription) {
+      state = { ...state, subtitle: "没有可用字幕", analysis: "已自动批准本机识别", progress: 20, progressLabel: "正在启动本机语音识别", progressState: "active", localPrompt: false, debug: { ...state.debug, subtitle: subtitleDebug || state.debug?.subtitle || "" } };
+      render();
+      runLocalTranscription(runId, key);
+      return;
+    }
+    state = { ...state, subtitle: "没有可用字幕", analysis: "等待选择本机识别", progress: 20, progressLabel: "请确认是否使用本机语音识别", progressState: "active", localPrompt: true, debug: { ...state.debug, subtitle: subtitleDebug || state.debug?.subtitle || "" } };
+    render();
+  }
+
+  async function runLocalTranscription(runId = analysisRunId, key = currentBvid) {
+    if (!isCurrentAnalysisRun(runId, key)) return;
+    const localRunId = ++localTranscriptionRunId;
+    const isCurrentLocalRun = () => localRunId === localTranscriptionRunId && isCurrentAnalysisRun(runId, key);
     const identity = getVideoIdentity();
-    if (!identity.key || currentBvid !== identity.key) return;
+    if (!identity.key || !isCurrentLocalRun()) return;
     if (await isUploaderSkipped(identity)) {
-      if (currentBvid !== identity.key || getVideoIdentity().key !== identity.key) return;
+      if (!isCurrentLocalRun()) return;
       state = { ...state, subtitle: "已跳过", analysis: "投稿用户 MID 已在跳过名单中", progress: 100, progressLabel: "已按跳过名单停止分析", progressState: "completed", segments: [], localPrompt: false };
       render();
       return;
     }
-    if (currentBvid !== identity.key || getVideoIdentity().key !== identity.key) return;
+    if (!isCurrentLocalRun()) return;
     const requestId = crypto.randomUUID();
     localRequestId = requestId;
+    activeLocalTranscription = { runId, key, localRunId, requestId };
     const video = document.querySelector("video");
     state = { ...state, localPrompt: false, subtitle: "获取音频中", analysis: "本机识别中", progress: 20, progressLabel: "正在提交本机识别任务", progressState: "active", debug: { ...state.debug, audioUrls: [] } };
     render();
@@ -387,21 +431,33 @@
     if (!audioUrls.length) {
       state = { ...state, subtitle: "音频获取失败", analysis: "未找到独立音频流", progress: 20, progressLabel: "请播放片刻后重试", progressState: "failed" };
       render();
+      if (localRunId === localTranscriptionRunId) {
+        localRequestId = null;
+        activeLocalTranscription = null;
+      }
       return;
     }
     const result = await send({ type: "TRANSCRIBE_LOCAL", requestId, identity, audioUrls, duration: video?.duration });
-    if (currentBvid !== identity.key || getVideoIdentity().key !== identity.key) return;
+    if (!isCurrentLocalRun()) return;
     if (result.status !== "ready" || !result.timeline) {
       state = { ...state, subtitle: "本机识别失败", analysis: result.error || "无法生成字幕", progress: 20, progressLabel: "流程未完成", progressState: "failed" };
       render();
+      if (localRunId === localTranscriptionRunId) {
+        localRequestId = null;
+        activeLocalTranscription = null;
+      }
       return;
     }
     state = { ...state, transcription: null, subtitle: "已获取（本机语音识别）", analysis: "分析中", progress: 70, progressLabel: "正在等待模型分析", progressState: "active", debug: { ...state.debug, subtitleItems: result.subtitleItems || [] } };
     render();
     const analyzed = await send({ type: "ANALYZE", bvid: identity.bvid || `aid-${identity.aid}`, cacheKey: `${identity.key}:local`, timeline: result.timeline, duration: video?.duration, force: true });
-    if (currentBvid !== identity.key || getVideoIdentity().key !== identity.key) return;
+    if (!isCurrentLocalRun()) return;
     state = { ...state, analysis: analyzed.status === "completed" ? `已完成（${analyzed.segments.length} 段）` : analyzed.error || "分析失败", progress: analyzed.status === "completed" ? 100 : 90, progressLabel: analyzed.status === "completed" ? "分析完成" : "流程未完成", progressState: analyzed.status === "completed" ? "completed" : "failed", segments: analyzed.segments || [], debug: { ...state.debug, request: analyzed.requestDebug || "", response: analyzed.responseDebug || "", reasoning: analyzed.reasoningDebug || "" } };
     render();
+    if (localRunId === localTranscriptionRunId) {
+      localRequestId = null;
+      activeLocalTranscription = null;
+    }
   }
 
   async function startAnalysis(force = false) {
@@ -452,9 +508,7 @@
     const subtitleControl = await waitForElement(SUBTITLE_CONTROL_SELECTOR, SUBTITLE_CONTROL_WAIT_TIMEOUT, runId, key);
     if (subtitleControl.status === "cancelled") return;
     if (subtitleControl.status === "timeout") {
-      if (!isCurrentAnalysisRun(runId, key)) return;
-      state = { ...state, subtitle: "没有可用字幕", analysis: "等待选择本机识别", progress: 20, progressLabel: "请确认是否使用本机语音识别", progressState: "active", localPrompt: true };
-      render();
+      await handleNoSubtitles(runId, key);
       return;
     }
     if (!isCurrentAnalysisRun(runId, key) || !document.querySelector(SUBTITLE_CONTROL_SELECTOR)) return;
@@ -465,11 +519,11 @@
     if (!isCurrentAnalysisRun(runId, key)) return;
     if (subtitles.status !== "ready") {
       if (subtitles.status === "no-subtitles") {
-        state = { ...state, subtitle: "没有可用字幕", analysis: "等待选择本机识别", progress: 20, progressLabel: "请确认是否使用本机语音识别", progressState: "active", localPrompt: true, debug: { ...state.debug, subtitle: subtitles.debug || "" } };
+        await handleNoSubtitles(runId, key, subtitles.debug || "");
       } else {
         state = { ...state, subtitle: "获取失败", analysis: subtitles.error || "无法分析", progressLabel: "流程未完成", progressState: "failed", debug: { ...state.debug, subtitle: subtitles.debug || subtitles.error || "" } };
+        render();
       }
-      render();
       return;
     }
     state = { ...state, subtitle: `已获取（${subtitles.subtitleName}）`, analysis: "分析中", progress: 70, progressLabel: "正在等待模型分析", progressState: "active", debug: { ...state.debug, subtitleItems: subtitles.subtitleItems || [] } };
