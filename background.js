@@ -345,6 +345,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     chrome.storage.sync.get("model").then(({ model }) => sendResponse({ model: model || "未配置模型" }));
     return true;
   }
+  if (message.type === "SAVE_LOCAL_TRANSCRIPT") {
+    chrome.storage.session.set({ [`localTranscript:${message.cacheKey}`]: message.transcript }).then(() => sendResponse({ status: "saved" })).catch((error) => sendResponse({ status: "failed", error: error.message || "暂存字幕失败。" }));
+    return true;
+  }
+  if (message.type === "GET_LOCAL_TRANSCRIPT") {
+    chrome.storage.session.get(`localTranscript:${message.cacheKey}`).then((stored) => sendResponse({ transcript: stored[`localTranscript:${message.cacheKey}`] || null })).catch((error) => sendResponse({ transcript: null, error: error.message || "读取暂存字幕失败。" }));
+    return true;
+  }
   if (message.type === "OPEN_OPTIONS") {
     chrome.runtime.openOptionsPage().then(() => sendResponse({ status: "opened" })).catch((error) => sendResponse({ status: "failed", error: error.message || "无法打开扩展设置页。" }));
     return true;
