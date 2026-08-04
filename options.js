@@ -70,10 +70,12 @@ D. 从上下文看，该片段与前后主线存在明显切换或可独立跳�
 - 回复第一个字符必须是 {，最后一个字符必须是 }
 现在输出 JSON：`;
 const SKIPPED_UPLOADER_MIDS_KEY = "skippedUploaderMids";
+const HIDE_OVERLAY_IN_FULLSCREEN_KEY = "hideOverlayInFullscreen";
 const form = document.querySelector("#settings");
 const keyInput = document.querySelector("#api-key");
 const modelInput = document.querySelector("#model");
 const promptInput = document.querySelector("#prompt");
+const hideOverlayInFullscreenInput = document.querySelector("#hide-overlay-in-fullscreen");
 const skipMidInput = document.querySelector("#skip-mid-input");
 const skipMidError = document.querySelector("#skip-mid-error");
 const skipMidList = document.querySelector("#skip-mid-list");
@@ -362,10 +364,11 @@ skipMidInput.addEventListener("keydown", (event) => {
 try {
   const [local, sync] = await Promise.all([
     chrome.storage.local.get("openRouterApiKey"),
-    chrome.storage.sync.get(["model", "prompt", SKIPPED_UPLOADER_MIDS_KEY])
+    chrome.storage.sync.get(["model", "prompt", SKIPPED_UPLOADER_MIDS_KEY, HIDE_OVERLAY_IN_FULLSCREEN_KEY])
   ]);
   modelInput.value = sync.model || "deepseek/deepseek-chat";
   promptInput.value = sync.prompt || DEFAULT_PROMPT;
+  hideOverlayInFullscreenInput.checked = sync[HIDE_OVERLAY_IN_FULLSCREEN_KEY] === true;
   skippedUploaderMids = normalizeSkippedUploaderMids(sync[SKIPPED_UPLOADER_MIDS_KEY]);
   renderSkippedUploaderMids();
   loadUploaderProfiles(skippedUploaderMids);
@@ -394,7 +397,12 @@ form.addEventListener("submit", async (event) => {
   setSaveState(true);
   setStatus("正在保存设置…");
   try {
-    const writes = [chrome.storage.sync.set({ model, prompt, [SKIPPED_UPLOADER_MIDS_KEY]: skippedUploaderMids })];
+    const writes = [chrome.storage.sync.set({
+      model,
+      prompt,
+      [SKIPPED_UPLOADER_MIDS_KEY]: skippedUploaderMids,
+      [HIDE_OVERLAY_IN_FULLSCREEN_KEY]: hideOverlayInFullscreenInput.checked
+    })];
     if (apiKey) writes.push(chrome.storage.local.set({ openRouterApiKey: apiKey }));
     await Promise.all(writes);
     keyInput.value = "";

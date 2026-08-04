@@ -21,6 +21,7 @@
         <button id="tab-connection" class="settings-tab" type="button" role="tab" aria-selected="true" aria-controls="panel-connection" tabindex="0" data-tab="connection">连接设置</button>
         <button id="tab-rules" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-rules" tabindex="-1" data-tab="rules">识别规则</button>
         <button id="tab-skip-users" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-skip-users" tabindex="-1" data-tab="skip-users">跳过用户</button>
+        <button id="tab-interface" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-interface" tabindex="-1" data-tab="interface">界面设置</button>
       </div>
 
       <form id="settings" novalidate>
@@ -76,6 +77,21 @@
           <ul id="skip-mid-list" class="skip-mid-list" aria-label="跳过投稿用户列表"></ul>
         </section>
 
+        <section id="panel-interface" class="tab-panel" role="tabpanel" aria-labelledby="tab-interface" data-panel="interface" hidden>
+          <div class="section-heading">
+            <h2>界面设置</h2>
+            <p>控制视频播放时悬浮窗的显示方式。</p>
+          </div>
+
+          <div class="field-group">
+            <label class="checkbox-field" for="hide-overlay-in-fullscreen">
+              <input id="hide-overlay-in-fullscreen" name="hideOverlayInFullscreen" type="checkbox">
+              <span>全屏播放时隐藏悬浮窗</span>
+            </label>
+            <p class="field-help">进入全屏后隐藏完整面板和圆形悬浮球，退出全屏时自动恢复。</p>
+          </div>
+
+        </section>
         <div class="form-actions">
           <button id="save-settings" type="submit">保存设置</button>
           <p id="status" class="form-status" role="status" aria-live="polite" aria-atomic="true"></p>

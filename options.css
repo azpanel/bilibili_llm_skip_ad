@@ -161,6 +161,21 @@ label {
   font-weight: 650;
 }
 
+
+.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.checkbox-field input {
+  width: 18px;
+  min-height: 18px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--color-primary);
+}
 input,
 textarea {
   width: 100%;

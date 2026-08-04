@@ -1,5 +1,7 @@
 (() => {
+  const ROOT_ID = "bili-ai-ad-skip-root";
   const PANEL_ID = "bili-ai-ad-skip-panel";
+  const ORB_ID = "bili-ai-ad-skip-orb";
   const TOAST_ID = "bili-ai-ad-skip-toast";
   const PLAYER_READY_SELECTOR = ".bpx-player-ctrl-playbackrate-result";
   const SUBTITLE_CONTROL_SELECTOR = ".bpx-player-ctrl-subtitle-result";
@@ -10,9 +12,12 @@
   let analysisRunId = 0;
   let cancelElementWait = null;
   const PANEL_LAYOUT_KEY = "panelLayout";
+  const ORB_LAYOUT_KEY = "orbLayout";
+  const UI_MODE_KEY = "uiMode";
+  const HIDE_OVERLAY_IN_FULLSCREEN_KEY = "hideOverlayInFullscreen";
   const SKIPPED_UPLOADER_MIDS_KEY = "skippedUploaderMids";
   const AUTO_APPROVE_LOCAL_TRANSCRIPTION_KEY = "autoApproveLocalTranscription";
-  let state = { subtitle: "等待视频", analysis: "未开始", model: "读取中", progress: 0, progressLabel: "", progressState: "idle", transcription: null, segments: [], debug: null, autoSkip: true, autoApproveLocalTranscription: false, localPrompt: false, debugOpen: false };
+  let state = { subtitle: "等待视频", analysis: "未开始", model: "读取中", progress: 0, progressLabel: "", progressState: "idle", transcription: null, segments: [], debug: null, autoSkip: true, autoApproveLocalTranscription: false, hideOverlayInFullscreen: false, localPrompt: false, debugOpen: false, uiMode: "orb" };
   let localRequestId = null;
   let localTranscriptionRunId = 0;
   let activeLocalTranscription = null;
@@ -40,6 +45,12 @@
     render();
   });
   let lastJumpAt = 0;
+
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "sync" || !changes[HIDE_OVERLAY_IN_FULLSCREEN_KEY]) return;
+    state = { ...state, hideOverlayInFullscreen: changes[HIDE_OVERLAY_IN_FULLSCREEN_KEY].newValue === true };
+    render();
+  });
 
   function normalizeUploaderMid(value) {
     const trimmed = String(value ?? "").trim();
@@ -173,12 +184,46 @@
     });
   }
 
+  function orbLabel(progress) {
+    const segmentText = state.segments.length ? `，发现 ${state.segments.length} 段广告` : "";
+    const autoSkipText = state.autoSkip ? "自动跳过已开启" : "自动跳过已关闭";
+    if (state.localPrompt) return "AI 广告跳过，需要确认是否进行本机语音识别，点击查看";
+    if (state.progressState === "failed") return `AI 广告跳过，${state.analysis}，点击查看详情`;
+    if (state.progressState === "active") return `AI 广告跳过，${state.progressLabel}，${progress}%`;
+    if (state.progressState === "completed") return `AI 广告跳过，分析完成${segmentText}，${autoSkipText}`;
+    return `AI 广告跳过，${state.analysis}，点击查看详情`;
+  }
+
+  function setUiMode(mode, persist = true, focus = true) {
+    state = { ...state, uiMode: mode };
+    render();
+    if (persist) chrome.storage.local.set({ [UI_MODE_KEY]: mode }).catch(() => {});
+    if (!focus) return;
+    requestAnimationFrame(() => {
+      if (mode === "panel") document.querySelector("#bili-ai-collapse")?.focus();
+      else document.getElementById(ORB_ID)?.focus();
+    });
+  }
+
   function render() {
     const panel = document.getElementById(PANEL_ID);
-    if (!panel) return;
+    const orb = document.getElementById(ORB_ID);
+    if (!panel || !orb) return;
     const progress = Math.max(0, Math.min(100, state.progress));
     const transcription = state.transcription;
     const transcriptionProgress = Math.max(0, Math.min(100, transcription?.progress || 0));
+
+    const overlayHidden = state.hideOverlayInFullscreen && Boolean(document.fullscreenElement);
+    panel.hidden = overlayHidden || state.uiMode !== "panel";
+    orb.hidden = overlayHidden || state.uiMode !== "orb";
+    orb.className = `bili-ai-orb bili-ai-orb-${state.localPrompt ? "attention" : state.progressState}`;
+    orb.style.setProperty("--bili-ai-orb-progress", `${progress * 3.6}deg`);
+    orb.setAttribute("aria-label", orbLabel(progress));
+    orb.setAttribute("aria-expanded", String(state.uiMode === "panel"));
+    const badge = orb.querySelector(".bili-ai-orb-badge");
+    badge.hidden = !state.segments.length;
+    badge.textContent = state.segments.length > 9 ? "9+" : String(state.segments.length);
+    orb.querySelector(".bili-ai-orb-auto").hidden = !state.autoSkip;
 
     panel.querySelector("#bili-ai-subtitle").textContent = state.subtitle;
     panel.querySelector("#bili-ai-analysis").textContent = state.analysis;
@@ -205,6 +250,7 @@
     const autoApproveLocal = panel.querySelector("#bili-ai-auto-approve-local");
     if (autoApproveLocal.checked !== state.autoApproveLocalTranscription) autoApproveLocal.checked = state.autoApproveLocalTranscription;
     panel.querySelector("#bili-ai-debug-view").hidden = !state.debugOpen;
+    panel.querySelector("#bili-ai-debug").setAttribute("aria-expanded", String(state.debugOpen));
     renderSubtitleDebug(panel.querySelector("#bili-ai-debug-subtitle"), state.debug?.subtitleItems, state.debug?.subtitle);
     panel.querySelector("#bili-ai-debug-audio").textContent = state.debug?.audioUrls?.length ? state.debug.audioUrls.join("\n\n") : "尚未解析到音频文件。";
     panel.querySelector("#bili-ai-debug-uploader").textContent = state.debug?.uploaderId || "当前页面未提取到投稿用户 MID。";
@@ -237,7 +283,8 @@
   }
 
   function bindPanelEvents(panel) {
-    panel.querySelector("#bili-ai-auto").addEventListener("change", (event) => { state.autoSkip = event.target.checked; });
+    panel.querySelector("#bili-ai-collapse").addEventListener("click", () => setUiMode("orb"));
+    panel.querySelector("#bili-ai-auto").addEventListener("change", (event) => { state.autoSkip = event.target.checked; render(); });
     panel.querySelector("#bili-ai-auto-approve-local").addEventListener("change", (event) => {
       preferenceRevision += 1;
       state = { ...state, autoApproveLocalTranscription: event.target.checked };
@@ -293,7 +340,17 @@
   }
 
   function clamp(value, min, max) {
-    return Math.min(Math.max(value, min), max);
+    return Math.min(Math.max(value, min), Math.max(min, max));
+  }
+
+  function viewportBounds() {
+    const viewport = window.visualViewport;
+    return {
+      left: viewport?.offsetLeft || 0,
+      top: viewport?.offsetTop || 0,
+      width: viewport?.width || window.innerWidth,
+      height: viewport?.height || window.innerHeight
+    };
   }
 
   function savePanelLayout(panel) {
@@ -301,33 +358,50 @@
     chrome.storage.local.set({ [PANEL_LAYOUT_KEY]: { left: rect.left, top: rect.top, width: rect.width, height: rect.height } });
   }
 
+  function constrainPanel(panel) {
+    const bounds = viewportBounds();
+    const rect = panel.getBoundingClientRect();
+    const width = clamp(rect.width, 240, bounds.width);
+    const height = clamp(rect.height, 160, bounds.height);
+    panel.style.width = `${width}px`;
+    panel.style.height = `${height}px`;
+    panel.style.left = `${clamp(rect.left, bounds.left, bounds.left + bounds.width - width)}px`;
+    panel.style.top = `${clamp(rect.top, bounds.top, bounds.top + bounds.height - height)}px`;
+    panel.style.right = "auto";
+    panel.style.bottom = "auto";
+  }
+
   function bindPanelLayout(panel) {
     const dragHandle = panel.querySelector("#bili-ai-drag-handle");
     const resizeHandle = panel.querySelector("#bili-ai-resize-handle");
     const startInteraction = (event, mode) => {
+      if (event.target.closest("button")) return;
       event.preventDefault();
       const rect = panel.getBoundingClientRect();
+      const bounds = viewportBounds();
       const startX = event.clientX;
       const startY = event.clientY;
-      panel.setPointerCapture?.(event.pointerId);
+      event.currentTarget.setPointerCapture?.(event.pointerId);
       const move = (moveEvent) => {
         if (mode === "move") {
-          panel.style.left = `${clamp(rect.left + moveEvent.clientX - startX, 0, window.innerWidth - 80)}px`;
-          panel.style.top = `${clamp(rect.top + moveEvent.clientY - startY, 0, window.innerHeight - 50)}px`;
+          panel.style.left = `${clamp(rect.left + moveEvent.clientX - startX, bounds.left, bounds.left + bounds.width - rect.width)}px`;
+          panel.style.top = `${clamp(rect.top + moveEvent.clientY - startY, bounds.top, bounds.top + bounds.height - rect.height)}px`;
           panel.style.right = "auto";
           panel.style.bottom = "auto";
         } else {
-          panel.style.width = `${clamp(rect.width + moveEvent.clientX - startX, 240, window.innerWidth - rect.left)}px`;
-          panel.style.height = `${clamp(rect.height + moveEvent.clientY - startY, 160, window.innerHeight - rect.top)}px`;
+          panel.style.width = `${clamp(rect.width + moveEvent.clientX - startX, 240, bounds.left + bounds.width - rect.left)}px`;
+          panel.style.height = `${clamp(rect.height + moveEvent.clientY - startY, 160, bounds.top + bounds.height - rect.top)}px`;
         }
       };
       const end = () => {
         document.removeEventListener("pointermove", move);
         document.removeEventListener("pointerup", end);
+        document.removeEventListener("pointercancel", end);
         savePanelLayout(panel);
       };
       document.addEventListener("pointermove", move);
       document.addEventListener("pointerup", end, { once: true });
+      document.addEventListener("pointercancel", end, { once: true });
     };
     dragHandle.addEventListener("pointerdown", (event) => startInteraction(event, "move"));
     resizeHandle.addEventListener("pointerdown", (event) => startInteraction(event, "resize"));
@@ -336,51 +410,149 @@
   async function restorePanelLayout(panel) {
     const { [PANEL_LAYOUT_KEY]: layout } = await chrome.storage.local.get(PANEL_LAYOUT_KEY);
     if (!layout) return;
-    const width = clamp(layout.width, 240, window.innerWidth);
-    const height = clamp(layout.height, 160, window.innerHeight);
+    const bounds = viewportBounds();
+    const width = clamp(layout.width, 240, bounds.width);
+    const height = clamp(layout.height, 160, bounds.height);
     panel.style.width = `${width}px`;
     panel.style.height = `${height}px`;
-    panel.style.left = `${clamp(layout.left, 0, window.innerWidth - 80)}px`;
-    panel.style.top = `${clamp(layout.top, 0, window.innerHeight - 50)}px`;
+    panel.style.left = `${clamp(layout.left, bounds.left, bounds.left + bounds.width - width)}px`;
+    panel.style.top = `${clamp(layout.top, bounds.top, bounds.top + bounds.height - height)}px`;
     panel.style.right = "auto";
     panel.style.bottom = "auto";
   }
 
-  function restoreAutoApprovePreference() {
+  function placeOrb(orb, layout = {}) {
+    const bounds = viewportBounds();
+    const size = orb.offsetWidth || 56;
+    const side = layout.side === "left" ? "left" : "right";
+    const storedRatio = Number(layout.offsetYRatio);
+    const offsetYRatio = clamp(Number.isFinite(storedRatio) ? storedRatio : 0.38, 0, 1);
+    orb.style.left = `${side === "left" ? bounds.left + 12 : bounds.left + bounds.width - size - 12}px`;
+    orb.style.top = `${clamp(bounds.top + offsetYRatio * (bounds.height - size), bounds.top + 12, bounds.top + bounds.height - size - 12)}px`;
+    orb.dataset.side = side;
+    orb.dataset.offsetYRatio = String(offsetYRatio);
+  }
+
+  function saveOrbLayout(orb) {
+    const storedRatio = Number(orb.dataset.offsetYRatio);
+    const layout = { side: orb.dataset.side || "right", offsetYRatio: Number.isFinite(storedRatio) ? storedRatio : 0.38 };
+    chrome.storage.local.set({ [ORB_LAYOUT_KEY]: layout }).catch(() => {});
+  }
+
+  function bindOrbLayout(orb) {
+    orb.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      const rect = orb.getBoundingClientRect();
+      const bounds = viewportBounds();
+      const startX = event.clientX;
+      const startY = event.clientY;
+      let dragged = false;
+      orb.setPointerCapture?.(event.pointerId);
+      const move = (moveEvent) => {
+        const deltaX = moveEvent.clientX - startX;
+        const deltaY = moveEvent.clientY - startY;
+        if (Math.hypot(deltaX, deltaY) >= 7) dragged = true;
+        if (!dragged) return;
+        event.preventDefault();
+        orb.style.left = `${clamp(rect.left + deltaX, bounds.left + 4, bounds.left + bounds.width - rect.width - 4)}px`;
+        orb.style.top = `${clamp(rect.top + deltaY, bounds.top + 4, bounds.top + bounds.height - rect.height - 4)}px`;
+      };
+      const end = (endEvent) => {
+        document.removeEventListener("pointermove", move);
+        document.removeEventListener("pointerup", end);
+        document.removeEventListener("pointercancel", end);
+        if (endEvent.type === "pointercancel") {
+          placeOrb(orb, { side: orb.dataset.side, offsetYRatio: orb.dataset.offsetYRatio });
+          return;
+        }
+        if (!dragged) {
+          setUiMode("panel");
+          return;
+        }
+        const finalRect = orb.getBoundingClientRect();
+        const side = finalRect.left + finalRect.width / 2 < bounds.left + bounds.width / 2 ? "left" : "right";
+        const offsetYRatio = (finalRect.top - bounds.top) / Math.max(1, bounds.height - finalRect.height);
+        placeOrb(orb, { side, offsetYRatio });
+        saveOrbLayout(orb);
+      };
+      document.addEventListener("pointermove", move);
+      document.addEventListener("pointerup", end, { once: true });
+      document.addEventListener("pointercancel", end, { once: true });
+    });
+    orb.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      setUiMode("panel");
+    });
+  }
+
+  async function restorePreferences(orb) {
     const revision = preferenceRevision;
-    preferencesReady = chrome.storage.local.get(AUTO_APPROVE_LOCAL_TRANSCRIPTION_KEY).then((stored) => {
+    preferencesReady = Promise.all([
+      chrome.storage.local.get([AUTO_APPROVE_LOCAL_TRANSCRIPTION_KEY, UI_MODE_KEY, ORB_LAYOUT_KEY]),
+      chrome.storage.sync.get(HIDE_OVERLAY_IN_FULLSCREEN_KEY)
+    ]).then(([stored, synced]) => {
       if (preferenceRevision !== revision) return;
-      state = { ...state, autoApproveLocalTranscription: stored[AUTO_APPROVE_LOCAL_TRANSCRIPTION_KEY] === true };
+      state = {
+        ...state,
+        autoApproveLocalTranscription: stored[AUTO_APPROVE_LOCAL_TRANSCRIPTION_KEY] === true,
+        uiMode: stored[UI_MODE_KEY] === "panel" ? "panel" : "orb",
+        hideOverlayInFullscreen: synced[HIDE_OVERLAY_IN_FULLSCREEN_KEY] === true,
+      };
+      placeOrb(orb, stored[ORB_LAYOUT_KEY]);
       render();
     }).catch(() => {});
   }
 
   function ensurePanel() {
-    if (document.getElementById(PANEL_ID)) return;
-    const panel = document.createElement("section");
-    panel.id = PANEL_ID;
-    panel.innerHTML = `
-      <div class="bili-ai-panel-content">
-      <div class="bili-ai-title" id="bili-ai-drag-handle"><span class="bili-ai-title-icon">AI</span><span class="bili-ai-title-copy"><b>AI 广告跳过</b><small>智能识别 · 自动略过</small></span><span class="bili-ai-drag-hint">拖动</span></div>
-      <div class="bili-ai-status"><span>字幕</span><strong id="bili-ai-subtitle"></strong></div>
-      <div class="bili-ai-status"><span>AI</span><strong id="bili-ai-analysis"></strong></div>
-      <div id="bili-ai-progress" class="bili-ai-progress" role="progressbar" aria-label="总流程进度" aria-valuemin="0" aria-valuemax="100"><div class="bili-ai-progress-track"><i id="bili-ai-progress-fill" class="bili-ai-progress-fill"></i></div><small id="bili-ai-progress-label"></small></div>
-      <section id="bili-ai-transcription" class="bili-ai-transcription" aria-live="polite"><div class="bili-ai-transcription-heading"><b>语音转文本</b><span id="bili-ai-transcription-percent"></span></div><div class="bili-ai-progress-track"><i id="bili-ai-transcription-fill" class="bili-ai-progress-fill bili-ai-progress-active"></i></div><small id="bili-ai-transcription-meta"></small></section>
-      <section id="bili-ai-local-prompt" class="bili-ai-local-prompt" aria-live="polite"><b>当前视频没有可用字幕</b><p>是否允许在本机使用语音识别？音频仅发送到本机服务；识别后的字幕仍会发送给你配置的 OpenRouter。</p><div><button id="bili-ai-local-confirm">仅本次识别</button><button id="bili-ai-local-cancel">取消</button></div></section>
-      <div class="bili-ai-status"><span>模型</span><strong id="bili-ai-model" class="bili-ai-model"></strong></div>
-      <div class="bili-ai-toggles"><label class="bili-ai-toggle"><input id="bili-ai-auto" type="checkbox"> 自动跳过</label><label class="bili-ai-toggle"><input id="bili-ai-auto-approve-local" type="checkbox"> 自动批准识别</label></div>
-      <div class="bili-ai-actions"><button id="bili-ai-retry">重新分析</button><button id="bili-ai-debug">调试信息</button></div>
-      <div id="bili-ai-segments" class="bili-ai-segments"></div>
-      <section id="bili-ai-debug-view" class="bili-ai-debug"><details open><summary>投稿用户 MID</summary><pre id="bili-ai-debug-uploader"></pre></details><details><summary>字幕获取</summary><div id="bili-ai-debug-subtitle"></div></details><details><summary>音频文件</summary><pre id="bili-ai-debug-audio"></pre></details><details><summary>AI 请求</summary><pre id="bili-ai-debug-request"></pre></details><details><summary>AI 响应</summary><pre id="bili-ai-debug-response"></pre></details><details><summary>模型推理（reasoning）</summary><pre id="bili-ai-debug-reasoning"></pre></details></section>
-      <div class="bili-ai-settings-action"><button id="bili-ai-open-settings" type="button">打开扩展设置</button></div>
-      </div>
-      <div id="bili-ai-resize-handle" aria-label="调整面板大小"></div>`;
-    document.documentElement.append(panel);
+    if (document.getElementById(ROOT_ID)) return;
+    const root = document.createElement("div");
+    root.id = ROOT_ID;
+    root.innerHTML = `
+      <button type="button" id="${ORB_ID}" class="bili-ai-orb" aria-controls="${PANEL_ID}" aria-expanded="false">
+        <span class="bili-ai-orb-face" aria-hidden="true">AI</span>
+        <span class="bili-ai-orb-badge" aria-hidden="true" hidden></span>
+        <span class="bili-ai-orb-auto" aria-hidden="true">✓</span>
+      </button>
+      <section id="${PANEL_ID}" aria-labelledby="bili-ai-panel-title" hidden>
+        <div class="bili-ai-panel-content">
+        <div class="bili-ai-title" id="bili-ai-drag-handle"><span class="bili-ai-title-icon">AI</span><span class="bili-ai-title-copy"><b id="bili-ai-panel-title">AI 广告跳过</b><small>智能识别 · 自动略过</small></span><span class="bili-ai-title-controls"><span class="bili-ai-drag-hint">拖动</span><button id="bili-ai-collapse" type="button" aria-label="切换为简约模式">收起</button></span></div>
+        <div class="bili-ai-status"><span>字幕</span><strong id="bili-ai-subtitle"></strong></div>
+        <div class="bili-ai-status"><span>AI</span><strong id="bili-ai-analysis"></strong></div>
+        <div id="bili-ai-progress" class="bili-ai-progress" role="progressbar" aria-label="总流程进度" aria-valuemin="0" aria-valuemax="100"><div class="bili-ai-progress-track"><i id="bili-ai-progress-fill" class="bili-ai-progress-fill"></i></div><small id="bili-ai-progress-label"></small></div>
+        <section id="bili-ai-transcription" class="bili-ai-transcription" aria-live="polite"><div class="bili-ai-transcription-heading"><b>语音转文本</b><span id="bili-ai-transcription-percent"></span></div><div class="bili-ai-progress-track"><i id="bili-ai-transcription-fill" class="bili-ai-progress-fill bili-ai-progress-active"></i></div><small id="bili-ai-transcription-meta"></small></section>
+        <section id="bili-ai-local-prompt" class="bili-ai-local-prompt" aria-live="polite"><b>当前视频没有可用字幕</b><p>是否允许在本机使用语音识别？音频仅发送到本机服务；识别后的字幕仍会发送给你配置的 OpenRouter。</p><div><button id="bili-ai-local-confirm">仅本次识别</button><button id="bili-ai-local-cancel">取消</button></div></section>
+        <div class="bili-ai-status"><span>模型</span><strong id="bili-ai-model" class="bili-ai-model"></strong></div>
+        <div class="bili-ai-toggles"><label class="bili-ai-toggle"><input id="bili-ai-auto" type="checkbox"> 自动跳过</label><label class="bili-ai-toggle"><input id="bili-ai-auto-approve-local" type="checkbox"> 自动批准识别</label></div>
+        <div class="bili-ai-actions"><button id="bili-ai-retry">重新分析</button><button id="bili-ai-debug" aria-expanded="false" aria-controls="bili-ai-debug-view">调试信息</button></div>
+        <div id="bili-ai-segments" class="bili-ai-segments"></div>
+        <section id="bili-ai-debug-view" class="bili-ai-debug"><details open><summary>投稿用户 MID</summary><pre id="bili-ai-debug-uploader"></pre></details><details><summary>字幕获取</summary><div id="bili-ai-debug-subtitle"></div></details><details><summary>音频文件</summary><pre id="bili-ai-debug-audio"></pre></details><details><summary>AI 请求</summary><pre id="bili-ai-debug-request"></pre></details><details><summary>AI 响应</summary><pre id="bili-ai-debug-response"></pre></details><details><summary>模型推理（reasoning）</summary><pre id="bili-ai-debug-reasoning"></pre></details></section>
+        <div class="bili-ai-settings-action"><button id="bili-ai-open-settings" type="button">打开扩展设置</button></div>
+        </div>
+        <div id="bili-ai-resize-handle" aria-label="调整面板大小"></div>
+      </section>`;
+    document.documentElement.append(root);
+    const panel = root.querySelector(`#${PANEL_ID}`);
+    const orb = root.querySelector(`#${ORB_ID}`);
     bindPanelEvents(panel);
     bindPanelLayout(panel);
+    bindOrbLayout(orb);
     render();
     restorePanelLayout(panel);
-    restoreAutoApprovePreference();
+    restorePreferences(orb);
+    const reposition = () => {
+      if (state.uiMode === "panel") constrainPanel(panel);
+      else placeOrb(orb, { side: orb.dataset.side, offsetYRatio: orb.dataset.offsetYRatio });
+    };
+    window.addEventListener("resize", reposition);
+    window.visualViewport?.addEventListener("resize", reposition);
+    window.visualViewport?.addEventListener("scroll", reposition);
+    document.addEventListener("fullscreenchange", () => {
+      const host = document.fullscreenElement || document.documentElement;
+      if (root.parentElement !== host) host.append(root);
+      requestAnimationFrame(reposition);
+      render();
+    });
   }
 
   async function handleNoSubtitles(runId, key, subtitleDebug = "") {
@@ -392,8 +564,9 @@
       runLocalTranscription(runId, key);
       return;
     }
-    state = { ...state, subtitle: "没有可用字幕", analysis: "等待选择本机识别", progress: 20, progressLabel: "请确认是否使用本机语音识别", progressState: "active", localPrompt: true, debug: { ...state.debug, subtitle: subtitleDebug || state.debug?.subtitle || "" } };
+    state = { ...state, subtitle: "没有可用字幕", analysis: "等待选择本机识别", progress: 20, progressLabel: "请确认是否使用本机语音识别", progressState: "active", localPrompt: true, debug: { ...state.debug, subtitle: subtitleDebug || state.debug?.subtitle || "" }, uiMode: "panel" };
     render();
+    requestAnimationFrame(() => document.querySelector("#bili-ai-local-confirm")?.focus());
   }
 
   async function runLocalTranscription(runId = analysisRunId, key = currentBvid) {
@@ -506,7 +679,7 @@
       render();
       const result = await send({ type: "ANALYZE", bvid: bvid || `aid-${identity.aid}`, cacheKey: `${transcriptCacheKey}:local`, timeline: cachedTranscript.timeline, duration: video?.duration || cachedTranscript.duration, force });
       if (!isCurrentAnalysisRun(runId, key)) return;
-      state = { ...state, analysis: result.status === "completed" ? `已完成（${result.segments.length} 段）` : result.status === "needs-settings" ? "请先在扩展设置中填写 API Key 和模型" : result.error || "分析失败", progress: result.status === "completed" ? 100 : 90, progressLabel: result.status === "completed" ? "分析完成" : "流程未完成", progressState: result.status === "completed" ? "completed" : "failed", segments: result.segments || [], debug: { ...state.debug, request: result.requestDebug || "", response: result.responseDebug || "", reasoning: result.reasoningDebug || "" } };
+      state = { ...state, analysis: result.status === "completed" ? `已完成（${result.segments.length} 段）` : result.status === "needs-settings" ? "请先在扩展设置中填写 API Key 和模型" : result.error || "分析失败", progress: result.status === "completed" ? 100 : 90, progressLabel: result.status === "completed" ? "分析完成" : "流程未完成", progressState: result.status === "completed" ? "completed" : "failed", segments: result.segments || [], debug: { ...state.debug, request: result.requestDebug || "", response: result.responseDebug || "", reasoning: result.reasoningDebug || "" }, uiMode: result.status === "needs-settings" ? "panel" : state.uiMode };
       render();
       return;
     }
@@ -572,7 +745,8 @@
       progressLabel: result.status === "completed" ? "分析完成" : "流程未完成",
       progressState: result.status === "completed" ? "completed" : "failed",
       segments: result.segments || [],
-      debug: { ...state.debug, request: result.requestDebug || "", response: result.responseDebug || "", reasoning: result.reasoningDebug || "" }
+      debug: { ...state.debug, request: result.requestDebug || "", response: result.responseDebug || "", reasoning: result.reasoningDebug || "" },
+      uiMode: result.status === "needs-settings" ? "panel" : state.uiMode
     };
     render();
   }
