@@ -569,8 +569,18 @@
     window.visualViewport?.addEventListener("resize", reposition);
     window.visualViewport?.addEventListener("scroll", reposition);
     document.addEventListener("fullscreenchange", () => {
+      const exiting = !document.fullscreenElement;
       const host = document.fullscreenElement || document.documentElement;
-      if (root.parentElement !== host) host.append(root);
+      if (root.parentElement !== host) {
+        host.append(root);
+        if (exiting) {
+          // 退出全屏：fixed 面板的定位上下文（含 transform 的播放器容器）已改变，
+          // 切换过渡期坐标不可靠。直接恢复进入全屏前保存的布局，避免面板跑位。
+          restorePanelLayout(panel).then(() => requestAnimationFrame(reposition));
+          render();
+          return;
+        }
+      }
       requestAnimationFrame(reposition);
       render();
     });
