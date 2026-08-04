@@ -301,6 +301,27 @@
       state = { ...state, debugOpen: !state.debugOpen };
       render();
     });
+    panel.querySelector("#bili-ai-skip-uploader").addEventListener("click", async () => {
+      const identity = getVideoIdentity();
+      if (!identity.uploaderId) {
+        state = { ...state, analysis: "暂未获取到投稿用户 MID" };
+        render();
+        return;
+      }
+      try {
+        const stored = await chrome.storage.sync.get(SKIPPED_UPLOADER_MIDS_KEY);
+        const mids = Array.isArray(stored[SKIPPED_UPLOADER_MIDS_KEY]) ? stored[SKIPPED_UPLOADER_MIDS_KEY].map(normalizeUploaderMid).filter(Boolean) : [];
+        if (!mids.includes(identity.uploaderId)) {
+          await chrome.storage.sync.set({ [SKIPPED_UPLOADER_MIDS_KEY]: [...new Set([...mids, identity.uploaderId])] });
+        }
+        invalidateAnalysisRun();
+        state = { ...state, subtitle: "已跳过", analysis: "已跳过识别此 UP", progress: 100, progressLabel: "已按跳过名单停止分析", progressState: "completed", transcription: null, segments: [], localPrompt: false };
+        render();
+      } catch {
+        state = { ...state, analysis: "保存跳过名单失败" };
+        render();
+      }
+    });
     panel.querySelector("#bili-ai-open-settings").addEventListener("click", async () => {
       const result = await send({ type: "OPEN_OPTIONS" });
       if (result?.status === "failed") {
@@ -527,7 +548,7 @@
         <div class="bili-ai-actions"><button id="bili-ai-retry">重新分析</button><button id="bili-ai-debug" aria-expanded="false" aria-controls="bili-ai-debug-view">调试信息</button></div>
         <div id="bili-ai-segments" class="bili-ai-segments"></div>
         <section id="bili-ai-debug-view" class="bili-ai-debug"><details open><summary>投稿用户 MID</summary><pre id="bili-ai-debug-uploader"></pre></details><details><summary>字幕获取</summary><div id="bili-ai-debug-subtitle"></div></details><details><summary>音频文件</summary><pre id="bili-ai-debug-audio"></pre></details><details><summary>AI 请求</summary><pre id="bili-ai-debug-request"></pre></details><details><summary>AI 响应</summary><pre id="bili-ai-debug-response"></pre></details><details><summary>模型推理（reasoning）</summary><pre id="bili-ai-debug-reasoning"></pre></details></section>
-        <div class="bili-ai-settings-action"><button id="bili-ai-open-settings" type="button">打开扩展设置</button></div>
+        <div class="bili-ai-settings-action"><button id="bili-ai-skip-uploader" type="button">跳过识别此 UP</button><button id="bili-ai-open-settings" type="button">打开扩展设置</button></div>
         </div>
         <div id="bili-ai-resize-handle" aria-label="调整面板大小"></div>
       </section>`;
