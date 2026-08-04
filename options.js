@@ -150,13 +150,13 @@ async function loadUploaderProfiles(mids, forceRefresh = false) {
   renderSkippedUploaderMids();
   try {
     const result = await chrome.runtime.sendMessage({ type: "GET_UPLOADER_PROFILES", mids: requestedMids, forceRefresh });
-    if (result?.status !== "completed") throw new Error(result?.error || "暂时无法获取昵称。");
+    if (result?.status !== "completed") throw new Error(result?.error || "暂时无法获取用户资料。");
     Object.entries(result.profiles || {}).forEach(([mid, profile]) => {
       if (skippedUploaderMids.includes(mid)) uploaderProfiles.set(mid, profile);
     });
   } catch (error) {
     requestedMids.forEach((mid) => {
-      if (skippedUploaderMids.includes(mid) && !uploaderProfiles.get(mid)?.name) uploaderProfiles.set(mid, { status: "error", error: "暂时无法获取昵称。" });
+      if (skippedUploaderMids.includes(mid) && !uploaderProfiles.get(mid)?.name) uploaderProfiles.set(mid, { status: "error", error: "暂时无法获取用户资料。" });
     });
   } finally {
     requestedMids.forEach((mid) => loadingUploaderMids.delete(mid));
@@ -196,11 +196,25 @@ function renderSkippedUploaderMids() {
     badge.className = "skip-uploader-badge";
     badge.textContent = "UP";
     badge.setAttribute("aria-hidden", "true");
+    if (profile?.face) {
+      const avatar = document.createElement("img");
+      avatar.className = "skip-uploader-avatar";
+      avatar.alt = "";
+      avatar.decoding = "async";
+      avatar.referrerPolicy = "no-referrer";
+      avatar.addEventListener("error", () => {
+        profile.face = "";
+        avatar.remove();
+        badge.textContent = "UP";
+      }, { once: true });
+      avatar.src = profile.face;
+      badge.replaceChildren(avatar);
+    }
     const copy = document.createElement("div");
     copy.className = "skip-uploader-copy";
     const name = document.createElement("strong");
     name.className = "skip-uploader-name";
-    name.textContent = profile?.name || (loading ? "正在查询昵称…" : "昵称暂不可用");
+    name.textContent = profile?.name || (loading ? "正在查询用户资料…" : "昵称暂不可用");
     const midText = document.createElement("span");
     midText.className = "skip-uploader-mid";
     midText.textContent = `MID ${mid}`;

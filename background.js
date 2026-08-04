@@ -103,14 +103,16 @@ async function fetchUploaderProfile(mid) {
   try {
     const response = await fetch(`https://api.bilibili.com/x/web-interface/card?mid=${encodeURIComponent(mid)}`, { credentials: "omit", signal: controller.signal });
     if (response.status === 429) throw new Error("B 站请求过于频繁，请稍后刷新。");
-    if (!response.ok) throw new Error("暂时无法获取昵称。");
+    if (!response.ok) throw new Error("暂时无法获取用户资料。");
     const payload = await response.json();
     const card = payload?.data?.card;
     const name = typeof card?.name === "string" ? card.name.trim() : "";
+    const faceValue = typeof card?.face === "string" ? card.face.trim() : "";
+    const face = apiUrl(faceValue).replace(/^http:\/\//i, "https://");
     if (payload?.code !== 0 || normalizeUploaderMid(card?.mid) !== mid || !name) throw new Error("未找到该 MID 对应的用户。");
-    return { mid, name };
+    return { mid, name, face: /^https:\/\//i.test(face) ? face : "" };
   } catch (error) {
-    if (error.name === "AbortError") throw new Error("查询昵称超时，请稍后刷新。");
+    if (error.name === "AbortError") throw new Error("查询用户资料超时，请稍后刷新。");
     throw error;
   } finally {
     clearTimeout(timer);
@@ -126,12 +128,12 @@ async function getUploaderProfiles(values, forceRefresh = false) {
 
   for (const mid of mids) {
     const entry = cache[mid];
-    if (!forceRefresh && entry?.name && entry.expiresAt > now) {
-      profiles[mid] = { status: "cached", name: entry.name };
+    if (!forceRefresh && entry?.name && typeof entry.face === "string" && entry.expiresAt > now) {
+      profiles[mid] = { status: "cached", name: entry.name, face: entry.face };
     } else if (!forceRefresh && entry?.error && entry.retryAfter > now) {
-      profiles[mid] = { status: "error", error: entry.error };
+      profiles[mid] = entry?.name ? { status: "stale", name: entry.name, face: entry.face || "", error: entry.error } : { status: "error", error: entry.error };
     } else {
-      if (entry?.name) profiles[mid] = { status: "stale", name: entry.name, error: "昵称待刷新。" };
+      if (entry?.name) profiles[mid] = { status: "stale", name: entry.name, face: entry.face || "", error: "用户资料待刷新。" };
       pending.push(mid);
     }
   }
@@ -144,13 +146,13 @@ async function getUploaderProfiles(values, forceRefresh = false) {
       request.finally(() => uploaderProfileRequests.delete(mid)).catch(() => {});
     }
     try {
-      const { name } = await request;
-      cache[mid] = { name, fetchedAt: now, expiresAt: now + UPLOADER_PROFILE_CACHE_TTL };
-      profiles[mid] = { status: "ready", name };
+      const { name, face } = await request;
+      cache[mid] = { name, face, fetchedAt: now, expiresAt: now + UPLOADER_PROFILE_CACHE_TTL };
+      profiles[mid] = { status: "ready", name, face };
     } catch (error) {
-      const message = error.message || "暂时无法获取昵称。";
+      const message = error.message || "暂时无法获取用户资料。";
       cache[mid] = cache[mid]?.name ? { ...cache[mid], error: message, retryAfter: now + UPLOADER_PROFILE_FAILURE_RETRY_DELAY } : { error: message, retryAfter: now + UPLOADER_PROFILE_FAILURE_RETRY_DELAY };
-      profiles[mid] = cache[mid]?.name ? { status: "stale", name: cache[mid].name, error: message } : { status: "error", error: message };
+      profiles[mid] = cache[mid]?.name ? { status: "stale", name: cache[mid].name, face: cache[mid].face || "", error: message } : { status: "error", error: message };
     }
   };
 
@@ -358,7 +360,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (message.type === "GET_UPLOADER_PROFILES") {
-    getUploaderProfiles(message.mids, Boolean(message.forceRefresh)).then(sendResponse).catch(() => sendResponse({ status: "failed", error: "查询昵称服务暂时不可用。" }));
+    getUploaderProfiles(message.mids, Boolean(message.forceRefresh)).then(sendResponse).catch(() => sendResponse({ status: "failed", error: "查询用户资料服务暂时不可用。" }));
     return true;
   }
   if (message.type === "ANALYZE") {
