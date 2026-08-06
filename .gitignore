@@ -19,6 +19,7 @@ htmlcov/
 
 # Claude Code 临时工作树与本地配置
 .claude/worktrees/
+.claude/skills/
 .claude/settings.local.json
 .claude/*.local.*
 
