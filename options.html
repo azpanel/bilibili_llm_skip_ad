@@ -4,102 +4,143 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>B 站 AI 广告跳过设置</title>
+  <link rel="stylesheet" href="vendor/tabler-1.4.0.min.css">
+  <link rel="stylesheet" href="vendor/tabler-icons/tabler-icons.min.css">
   <link rel="stylesheet" href="options.css">
 </head>
 <body>
-  <main class="options-page" aria-labelledby="page-title">
-    <header class="page-header">
-      <div class="brand-mark" aria-hidden="true">AI</div>
-      <div>
-        <h1 id="page-title">B 站 AI 广告跳过</h1>
-        <p>配置字幕分析所使用的模型与广告识别规则。</p>
-      </div>
-    </header>
-
-    <section class="settings-card" aria-label="扩展设置">
-      <div class="settings-tabs" role="tablist" aria-label="设置分类">
-        <button id="tab-connection" class="settings-tab" type="button" role="tab" aria-selected="true" aria-controls="panel-connection" tabindex="0" data-tab="connection">连接设置</button>
-        <button id="tab-rules" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-rules" tabindex="-1" data-tab="rules">识别规则</button>
-        <button id="tab-skip-users" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-skip-users" tabindex="-1" data-tab="skip-users">跳过用户</button>
-        <button id="tab-interface" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-interface" tabindex="-1" data-tab="interface">界面设置</button>
-      </div>
-
-      <form id="settings" novalidate>
-        <section id="panel-connection" class="tab-panel" role="tabpanel" aria-labelledby="tab-connection" data-panel="connection">
-          <div class="section-heading">
-            <h2>连接设置</h2>
-            <p>连接 OpenRouter，为视频字幕选择分析模型。</p>
-          </div>
-
-          <div class="field-group">
-            <label for="api-key">OpenRouter API Key</label>
-            <input id="api-key" name="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-or-..." aria-describedby="key-help key-hint">
-            <p id="key-help" class="field-help">密钥仅保存在当前设备的扩展本地存储中；留空保存不会覆盖已保存的密钥。</p>
-            <p id="key-hint" class="field-status"></p>
-          </div>
-
-          <div class="field-group">
-            <label for="model">模型名称</label>
-            <input id="model" name="model" type="text" required autocomplete="off" spellcheck="false" placeholder="deepseek/deepseek-chat" aria-describedby="model-help">
-            <p id="model-help" class="field-help">填写 OpenRouter 支持的模型标识，例如 <code>deepseek/deepseek-chat</code>。</p>
-          </div>
-        </section>
-
-        <section id="panel-rules" class="tab-panel" role="tabpanel" aria-labelledby="tab-rules" data-panel="rules" hidden>
-          <div class="section-heading">
-            <h2>识别规则</h2>
-            <p>定义模型如何判断字幕中的商业广告与推广内容。</p>
-          </div>
-
-          <div class="field-group">
-            <label for="prompt">识别广告提示词</label>
-            <textarea id="prompt" name="prompt" rows="12" required aria-describedby="prompt-help"></textarea>
-            <p id="prompt-help" class="field-help">请保留 JSON 输出格式要求，否则扩展可能无法识别可跳过时间段。</p>
-          </div>
-        </section>
-
-        <section id="panel-skip-users" class="tab-panel" role="tabpanel" aria-labelledby="tab-skip-users" data-panel="skip-users" hidden>
-          <div class="section-heading">
-            <h2>跳过投稿用户</h2>
-            <p>命中投稿用户 MID 后，扩展不会获取字幕、使用本机转写或请求 OpenRouter。</p>
-          </div>
-
-          <div class="field-group">
-            <label for="skip-mid-input">投稿用户 MID</label>
-            <div class="skip-mid-add-row">
-              <input id="skip-mid-input" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="例如 123456" aria-describedby="skip-mid-help skip-mid-error">
-              <button id="add-skip-mid" type="button">添加</button>
-            </div>
-            <p id="skip-mid-help" class="field-help">仅支持正整数 MID；添加、编辑或删除后会立即保存，并自动查询用户资料。用户资料仅缓存于当前设备。</p>
-            <p id="skip-mid-error" class="field-status" role="alert"></p>
-          </div>
-
-          <ul id="skip-mid-list" class="skip-mid-list" aria-label="跳过投稿用户列表"></ul>
-        </section>
-
-        <section id="panel-interface" class="tab-panel" role="tabpanel" aria-labelledby="tab-interface" data-panel="interface" hidden>
-          <div class="section-heading">
-            <h2>界面设置</h2>
-            <p>控制视频播放时悬浮窗的显示方式。</p>
-          </div>
-
-          <div class="field-group">
-            <label class="checkbox-field" for="hide-overlay-in-fullscreen">
-              <input id="hide-overlay-in-fullscreen" name="hideOverlayInFullscreen" type="checkbox">
-              <span>全屏播放时隐藏悬浮窗</span>
-            </label>
-            <p class="field-help">进入全屏后隐藏完整面板和圆形悬浮球，退出全屏时自动恢复。</p>
-          </div>
-
-        </section>
-        <div class="form-actions">
-          <button id="save-settings" type="submit">保存设置</button>
-          <p id="status" class="form-status" role="status" aria-live="polite" aria-atomic="true"></p>
+  <div class="page-wrapper">
+    <div class="container-tight py-4">
+      <header class="page-header" aria-labelledby="page-title">
+        <span class="avatar avatar-md bg-primary text-white rounded" aria-hidden="true">AI</span>
+        <div>
+          <h1 id="page-title" class="page-title mb-0">B 站 AI 广告跳过</h1>
+          <p class="text-secondary mb-0">配置字幕分析所使用的模型与广告识别规则。</p>
         </div>
-      </form>
-    </section>
-  </main>
+      </header>
 
+      <div class="card">
+        <div class="card-header">
+          <ul class="nav nav-tabs card-header-tabs" role="tablist" aria-label="设置分类">
+            <li class="nav-item" role="presentation">
+              <button id="tab-connection" class="nav-link active" type="button" role="tab" data-bs-toggle="tab" data-bs-target="#panel-connection" aria-controls="panel-connection" aria-selected="true" data-tab="connection">
+                <i class="ti ti-plug-connected me-1" aria-hidden="true"></i>连接设置
+              </button>
+            </li>
+            <li class="nav-item" role="presentation">
+              <button id="tab-rules" class="nav-link" type="button" role="tab" data-bs-toggle="tab" data-bs-target="#panel-rules" aria-controls="panel-rules" aria-selected="false" data-tab="rules">
+                <i class="ti ti-adjustments-alt me-1" aria-hidden="true"></i>识别规则
+              </button>
+            </li>
+            <li class="nav-item" role="presentation">
+              <button id="tab-skip-users" class="nav-link" type="button" role="tab" data-bs-toggle="tab" data-bs-target="#panel-skip-users" aria-controls="panel-skip-users" aria-selected="false" data-tab="skip-users">
+                <i class="ti ti-user-off me-1" aria-hidden="true"></i>跳过用户
+              </button>
+            </li>
+            <li class="nav-item" role="presentation">
+              <button id="tab-interface" class="nav-link" type="button" role="tab" data-bs-toggle="tab" data-bs-target="#panel-interface" aria-controls="panel-interface" aria-selected="false" data-tab="interface">
+                <i class="ti ti-layout me-1" aria-hidden="true"></i>界面设置
+              </button>
+            </li>
+          </ul>
+        </div>
+
+        <form id="settings" novalidate>
+          <div class="card-body">
+            <div class="tab-content">
+              <div id="panel-connection" class="tab-pane fade show active" role="tabpanel" aria-labelledby="tab-connection" data-panel="connection">
+                <div class="mb-4">
+                  <h2 class="mb-1">连接设置</h2>
+                  <p class="text-secondary">连接 OpenRouter，为视频字幕选择分析模型。</p>
+                </div>
+
+                <div class="mb-3">
+                  <label for="api-key" class="form-label">OpenRouter API Key</label>
+                  <input id="api-key" name="apiKey" type="password" class="form-control" autocomplete="off" spellcheck="false" placeholder="sk-or-..." aria-describedby="key-help key-hint">
+                  <p id="key-help" class="form-hint">密钥仅保存在当前设备的扩展本地存储中；留空保存不会覆盖已保存的密钥。</p>
+                  <p id="key-hint" class="form-hint"></p>
+                </div>
+
+                <div class="mb-3">
+                  <label for="model" class="form-label">模型名称</label>
+                  <input id="model" name="model" type="text" class="form-control" required autocomplete="off" spellcheck="false" placeholder="deepseek/deepseek-chat" aria-describedby="model-help">
+                  <p id="model-help" class="form-hint">填写 OpenRouter 支持的模型标识，例如 <code>deepseek/deepseek-chat</code>。</p>
+                </div>
+              </div>
+
+              <div id="panel-rules" class="tab-pane fade" role="tabpanel" aria-labelledby="tab-rules" data-panel="rules">
+                <div class="mb-4">
+                  <h2 class="mb-1">识别规则</h2>
+                  <p class="text-secondary">定义模型如何判断字幕中的商业广告与推广内容。</p>
+                </div>
+
+                <div class="mb-3">
+                  <label for="prompt" class="form-label">识别广告提示词</label>
+                  <textarea id="prompt" name="prompt" class="form-control" rows="12" required aria-describedby="prompt-help"></textarea>
+                  <p id="prompt-help" class="form-hint">请保留 JSON 输出格式要求，否则扩展可能无法识别可跳过时间段。</p>
+                </div>
+              </div>
+
+              <div id="panel-skip-users" class="tab-pane fade" role="tabpanel" aria-labelledby="tab-skip-users" data-panel="skip-users">
+                <div class="mb-3 d-flex align-items-center gap-2">
+                  <h2 class="mb-0">跳过投稿用户</h2>
+                  <i class="ti ti-info-circle text-secondary"
+                     data-bs-toggle="tooltip"
+                     data-bs-placement="right"
+                     title="命中投稿用户 MID 后，扩展不会获取字幕、使用本机转写或请求 OpenRouter。"
+                     style="cursor:default"></i>
+                </div>
+
+                <div class="mb-3">
+                  <label for="skip-mid-input" class="form-label d-flex align-items-center gap-1">
+                    投稿用户 MID
+                    <i class="ti ti-help-circle text-secondary"
+                       data-bs-toggle="tooltip"
+                       data-bs-placement="right"
+                       title="仅支持正整数 MID；添加编辑或删除后立即保存，并自动查询用户资料。用户资料仅缓存于当前设备。"
+                       style="cursor:default"></i>
+                  </label>
+                  <div class="skip-mid-add-row">
+                    <input id="skip-mid-input" type="text" class="form-control" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="例如 123456" aria-describedby="skip-mid-error">
+                    <button id="add-skip-mid" type="button" class="btn btn-primary">
+                      <i class="ti ti-plus me-1" aria-hidden="true"></i>添加
+                    </button>
+                  </div>
+                  <p id="skip-mid-error" class="form-hint text-danger" role="alert"></p>
+                </div>
+
+                <ul id="skip-mid-list" class="skip-mid-list" aria-label="跳过投稿用户列表"></ul>
+              </div>
+
+              <div id="panel-interface" class="tab-pane fade" role="tabpanel" aria-labelledby="tab-interface" data-panel="interface">
+                <div class="mb-4">
+                  <h2 class="mb-1">界面设置</h2>
+                  <p class="text-secondary">控制视频播放时悬浮窗的显示方式。</p>
+                </div>
+
+                <div class="mb-3">
+                  <label class="form-check">
+                    <input id="hide-overlay-in-fullscreen" name="hideOverlayInFullscreen" type="checkbox" class="form-check-input">
+                    <span class="form-check-label">全屏播放时隐藏悬浮窗</span>
+                  </label>
+                  <p class="form-hint">进入全屏后隐藏完整面板和圆形悬浮球，退出全屏时自动恢复。</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card-footer d-flex align-items-center gap-2">
+            <button id="save-settings" type="submit" class="btn btn-primary">
+              <i class="ti ti-device-floppy me-1" aria-hidden="true"></i>保存设置
+            </button>
+            <div id="status" class="alert d-none mb-0" role="status" aria-live="polite" aria-atomic="true"></div>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script src="vendor/tabler-1.4.0.min.js"></script>
   <script type="module" src="options.js"></script>
 </body>
 </html>

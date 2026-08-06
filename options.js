@@ -82,12 +82,13 @@ const skipMidList = document.querySelector("#skip-mid-list");
 const hint = document.querySelector("#key-hint");
 const status = document.querySelector("#status");
 const saveButton = document.querySelector("#save-settings");
-const tabs = [...document.querySelectorAll("[role=tab]")];
-const panels = [...document.querySelectorAll("[role=tabpanel]")];
+const tabs = [...document.querySelectorAll('[data-bs-toggle="tab"]')];
 let skippedUploaderMids = [];
 let editingSkipMid = null;
 let uploaderProfiles = new Map();
 let loadingUploaderMids = new Set();
+let lastAddedMid = null;
+let statusHideTimer = null;
 
 function normalizeUploaderMid(value) {
   const trimmed = String(value ?? "").trim();
@@ -106,21 +107,22 @@ function normalizeSkippedUploaderMids(value) {
   return mids;
 }
 
-function activateTab(tabId, moveFocus = false) {
-  tabs.forEach((tab) => {
-    const selected = tab.dataset.tab === tabId;
-    tab.setAttribute("aria-selected", String(selected));
-    tab.tabIndex = selected ? 0 : -1;
-  });
-  panels.forEach((panel) => {
-    panel.hidden = panel.dataset.panel !== tabId;
-  });
-  if (moveFocus) tabs.find((tab) => tab.dataset.tab === tabId)?.focus();
+function activateTab(tabId) {
+  const tabEl = tabs.find((tab) => tab.dataset.tab === tabId);
+  if (tabEl) tabler.Tab.getOrCreateInstance(tabEl).show();
 }
 
 function setStatus(message = "", state = "") {
+  clearTimeout(statusHideTimer);
+  if (!message) {
+    status.classList.remove("show");
+    statusHideTimer = setTimeout(() => status.classList.add("d-none"), 260);
+    return;
+  }
+  status.className = "alert mb-0 " + (state === "success" ? "alert-success" : state === "error" ? "alert-danger" : "alert-info");
   status.textContent = message;
-  status.dataset.state = state;
+  status.classList.remove("d-none");
+  requestAnimationFrame(() => status.classList.add("show"));
 }
 
 function setSkipMidError(message = "") {
@@ -175,6 +177,8 @@ function createActionButton(label, className, onClick, disabled = false) {
 }
 
 function renderSkippedUploaderMids() {
+  const enteringMid = lastAddedMid;
+  lastAddedMid = null;
   skipMidList.replaceChildren();
   if (!skippedUploaderMids.length) {
     const empty = document.createElement("li");
@@ -189,11 +193,13 @@ function renderSkippedUploaderMids() {
     const loading = loadingUploaderMids.has(mid);
     const item = document.createElement("li");
     item.className = "skip-uploader-item";
+    item.dataset.mid = mid;
+    if (editingSkipMid === mid) item.style.gridColumn = "1 / -1";
 
     const identity = document.createElement("div");
     identity.className = "skip-uploader-identity";
     const badge = document.createElement("span");
-    badge.className = "skip-uploader-badge";
+    badge.className = "skip-uploader-badge avatar avatar-sm bg-blue-lt rounded";
     badge.textContent = "UP";
     badge.setAttribute("aria-hidden", "true");
     if (profile?.face) {
@@ -231,13 +237,13 @@ function renderSkippedUploaderMids() {
     actions.className = "skip-uploader-actions";
     if (editingSkipMid !== mid) {
       actions.append(
-        createActionButton("刷新", "skip-uploader-action", () => loadUploaderProfiles([mid], true), loading),
-        createActionButton("编辑", "skip-uploader-action", () => {
+        createActionButton("刷新", "btn btn-sm btn-outline-secondary skip-uploader-action", () => loadUploaderProfiles([mid], true), loading),
+        createActionButton("编辑", "btn btn-sm btn-outline-secondary skip-uploader-action", () => {
           editingSkipMid = mid;
           renderSkippedUploaderMids();
           requestAnimationFrame(() => skipMidList.querySelector(`[data-edit-mid="${mid}"]`)?.focus());
         }, loading),
-        createActionButton("删除", "skip-uploader-delete", () => removeSkippedUploaderMid(mid), loading)
+        createActionButton("删除", "btn btn-sm btn-outline-danger skip-uploader-delete", () => removeSkippedUploaderMid(mid), loading)
       );
     }
     item.append(identity, actions);
@@ -245,10 +251,9 @@ function renderSkippedUploaderMids() {
     if (editingSkipMid === mid) {
       const editForm = document.createElement("div");
       editForm.className = "skip-uploader-edit-form";
-      const label = document.createElement("label");
-      label.textContent = "新 MID";
       const input = document.createElement("input");
       input.type = "text";
+      input.className = "form-control form-control-sm";
       input.inputMode = "numeric";
       input.autocomplete = "off";
       input.value = mid;
@@ -256,8 +261,8 @@ function renderSkippedUploaderMids() {
       input.setAttribute("aria-label", "新的投稿用户 MID");
       const error = document.createElement("span");
       error.className = "skip-uploader-edit-error";
-      const save = createActionButton("保存", "skip-uploader-save", () => updateSkippedUploaderMid(mid, input.value, error));
-      const cancel = createActionButton("取消", "skip-uploader-action", () => {
+      const save = createActionButton("保存", "btn btn-sm btn-primary skip-uploader-save", () => updateSkippedUploaderMid(mid, input.value, error));
+      const cancel = createActionButton("取消", "btn btn-sm btn-outline-secondary skip-uploader-action", () => {
         editingSkipMid = null;
         renderSkippedUploaderMids();
       });
@@ -268,10 +273,14 @@ function renderSkippedUploaderMids() {
           renderSkippedUploaderMids();
         }
       });
-      editForm.append(label, input, save, cancel, error);
+      editForm.append(input, save, cancel, error);
       item.append(editForm);
     }
     skipMidList.append(item);
+    if (mid === enteringMid) {
+      item.classList.add("skip-item-enter");
+      requestAnimationFrame(() => requestAnimationFrame(() => item.classList.remove("skip-item-enter")));
+    }
   });
 }
 
@@ -293,6 +302,7 @@ async function addSkippedUploaderMid() {
   skipMidInput.value = "";
   setSkipMidError();
   setStatus("跳过用户名单已保存。", "success");
+  lastAddedMid = mid;
   loadUploaderProfiles([mid]);
   renderSkippedUploaderMids();
 }
@@ -321,6 +331,14 @@ async function updateSkippedUploaderMid(previousMid, value, errorElement) {
 }
 
 async function removeSkippedUploaderMid(mid) {
+  const item = skipMidList.querySelector(`[data-mid="${mid}"]`);
+  if (item) {
+    item.classList.add("skip-item-exit");
+    await new Promise((resolve) => {
+      item.addEventListener("transitionend", resolve, { once: true });
+      setTimeout(resolve, 250);
+    });
+  }
   const nextMids = skippedUploaderMids.filter((itemMid) => itemMid !== mid);
   if (!await persistSkippedUploaderMids(nextMids)) return;
   skippedUploaderMids = nextMids;
@@ -332,7 +350,8 @@ async function removeSkippedUploaderMid(mid) {
 
 function setSaveState(saving) {
   saveButton.disabled = saving;
-  saveButton.textContent = saving ? "正在保存…" : "保存设置";
+  saveButton.classList.toggle("btn-loading", saving);
+  saveButton.setAttribute("aria-label", saving ? "正在保存…" : "保存设置");
   form.setAttribute("aria-busy", String(saving));
 }
 
@@ -351,20 +370,7 @@ function updateKeyHint(apiKey) {
   hint.textContent = apiKey ? `已保存密钥（末四位：${apiKey.slice(-4)}）。如不修改可留空。` : "尚未保存 API Key。";
 }
 
-tabs.forEach((tab, index) => {
-  tab.addEventListener("click", () => activateTab(tab.dataset.tab));
-  tab.addEventListener("keydown", (event) => {
-    const navigationKeys = ["ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown", "Home", "End"];
-    if (!navigationKeys.includes(event.key)) return;
-    event.preventDefault();
-    let nextIndex = index;
-    if (event.key === "ArrowLeft" || event.key === "ArrowUp") nextIndex = (index - 1 + tabs.length) % tabs.length;
-    if (event.key === "ArrowRight" || event.key === "ArrowDown") nextIndex = (index + 1) % tabs.length;
-    if (event.key === "Home") nextIndex = 0;
-    if (event.key === "End") nextIndex = tabs.length - 1;
-    activateTab(tabs[nextIndex].dataset.tab, true);
-  });
-});
+document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach((el) => tabler.Tooltip.getOrCreateInstance(el));
 
 [modelInput, promptInput].forEach((input) => input.addEventListener("input", () => clearFieldError(input)));
 skipMidInput.addEventListener("input", () => setSkipMidError());
