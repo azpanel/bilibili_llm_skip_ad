@@ -62,8 +62,14 @@
                 </div>
 
                 <div class="mb-3">
-                  <label for="model" class="form-label">模型名称</label>
+                  <div class="model-label-row">
+                    <label for="model" class="form-label mb-0">模型名称</label>
+                    <button id="open-model-market" type="button" class="btn btn-sm btn-outline-primary">
+                      <i class="ti ti-building-store me-1" aria-hidden="true"></i>打开市场
+                    </button>
+                  </div>
                   <input id="model" name="model" type="text" class="form-control" required autocomplete="off" spellcheck="false" placeholder="deepseek/deepseek-chat" aria-describedby="model-help">
+                  <div id="model-candidates" class="model-candidates" aria-label="候选模型"></div>
                   <p id="model-help" class="form-hint">填写 OpenRouter 支持的模型标识，例如 <code>deepseek/deepseek-chat</code>。</p>
                 </div>
               </div>
@@ -136,6 +142,45 @@
             <div id="status" class="alert d-none mb-0" role="status" aria-live="polite" aria-atomic="true"></div>
           </div>
         </form>
+      </div>
+    </div>
+  </div>
+
+  <div id="model-market" class="modal modal-blur fade" tabindex="-1" role="dialog" aria-labelledby="model-market-title" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable" role="document">
+      <div class="modal-content">
+        <div class="modal-header">
+          <div>
+            <h2 id="model-market-title" class="modal-title">OpenRouter 模型市场</h2>
+            <div id="model-market-meta" class="text-secondary small mt-1"></div>
+          </div>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+        </div>
+        <div class="modal-body">
+          <div class="model-market-toolbar mb-3">
+            <label class="model-market-search">
+              <span class="visually-hidden">搜索模型</span>
+              <div class="input-icon">
+                <span class="input-icon-addon"><i class="ti ti-search" aria-hidden="true"></i></span>
+                <input id="model-market-search" type="search" class="form-control" autocomplete="off" placeholder="搜索模型名称、标识或开发者">
+              </div>
+            </label>
+            <label>
+              <span class="visually-hidden">按开发者筛选</span>
+              <select id="model-market-author" class="form-select" aria-label="按开发者筛选">
+                <option value="">全部开发者</option>
+              </select>
+            </label>
+            <button id="refresh-model-market" type="button" class="btn btn-outline-secondary">
+              <i class="ti ti-refresh me-1" aria-hidden="true"></i>刷新
+            </button>
+          </div>
+          <div id="model-market-notice" class="alert d-none" role="status"></div>
+          <div id="model-market-results" class="model-market-results" aria-live="polite"></div>
+          <div class="model-market-more-wrap">
+            <button id="load-more-models" type="button" class="btn btn-outline-secondary d-none">加载更多</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>

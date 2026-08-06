@@ -1,6 +1,8 @@
 import { normalizeSubtitleBodies, toTimelineText } from "./lib/subtitles.js";
 import { extractJson, normalizeSegments } from "./lib/segments.js";
 
+import { normalizeOpenRouterCatalog } from "./lib/model-catalog.js";
+
 const DEFAULT_PROMPT = `你是视频跳过片段识别助手。你的唯一任务是：根据视频标题、简介和带时间戳字幕，找出“与视频主线无关、观众跳过后不影响理解视频主要内容”的商业植入/赞助推广片段。
 
 【视频主线】
@@ -82,7 +84,62 @@ const UPLOADER_PROFILE_CACHE_KEY = "uploaderProfileCache";
 const UPLOADER_PROFILE_CACHE_TTL = 7 * 24 * 60 * 60 * 1000;
 const UPLOADER_PROFILE_FAILURE_RETRY_DELAY = 15 * 60 * 1000;
 const UPLOADER_PROFILE_REQUEST_TIMEOUT = 10000;
+const OPENROUTER_CATALOG_URL = "https://openrouter.ai/api/frontend/v1/catalog/models";
+const OPENROUTER_CATALOG_CACHE_KEY = "openRouterModelCatalogCache";
+const OPENROUTER_CATALOG_CACHE_VERSION = 2;
+const OPENROUTER_CATALOG_CACHE_TTL = 6 * 60 * 60 * 1000;
+const OPENROUTER_CATALOG_REQUEST_TIMEOUT = 20000;
 const uploaderProfileRequests = new Map();
+let openRouterCatalogRequest = null;
+
+async function fetchOpenRouterCatalog() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), OPENROUTER_CATALOG_REQUEST_TIMEOUT);
+  try {
+    const response = await fetch(OPENROUTER_CATALOG_URL, { credentials: "omit", signal: controller.signal });
+    if (!response.ok) throw new Error(`模型目录请求失败（HTTP ${response.status}）。`);
+    const models = normalizeOpenRouterCatalog(await response.json());
+    const fetchedAt = Date.now();
+    await chrome.storage.local.set({
+      [OPENROUTER_CATALOG_CACHE_KEY]: {
+        version: OPENROUTER_CATALOG_CACHE_VERSION,
+        models,
+        fetchedAt,
+        expiresAt: fetchedAt + OPENROUTER_CATALOG_CACHE_TTL
+      }
+    });
+    return { status: "completed", models, fetchedAt, stale: false };
+  } catch (error) {
+    if (error.name === "AbortError") throw new Error("获取模型目录超时，请稍后重试。");
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function getOpenRouterModels(forceRefresh = false) {
+  const stored = await chrome.storage.local.get(OPENROUTER_CATALOG_CACHE_KEY);
+  const cache = stored[OPENROUTER_CATALOG_CACHE_KEY];
+  const hasCache = cache?.version === OPENROUTER_CATALOG_CACHE_VERSION
+    && Array.isArray(cache.models)
+    && Number.isFinite(cache.fetchedAt);
+  if (!forceRefresh && hasCache && cache.expiresAt > Date.now()) {
+    return { status: "completed", models: cache.models, fetchedAt: cache.fetchedAt, stale: false };
+  }
+
+  if (!openRouterCatalogRequest) {
+    openRouterCatalogRequest = fetchOpenRouterCatalog();
+    openRouterCatalogRequest.finally(() => { openRouterCatalogRequest = null; }).catch(() => {});
+  }
+  try {
+    return await openRouterCatalogRequest;
+  } catch (error) {
+    if (hasCache) {
+      return { status: "completed", models: cache.models, fetchedAt: cache.fetchedAt, stale: true, error: error.message };
+    }
+    return { status: "failed", models: [], fetchedAt: null, stale: false, error: error.message || "无法获取模型目录。" };
+  }
+}
 
 function normalizeUploaderMid(value) {
   const trimmed = String(value ?? "").trim();
@@ -361,6 +418,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message.type === "GET_UPLOADER_PROFILES") {
     getUploaderProfiles(message.mids, Boolean(message.forceRefresh)).then(sendResponse).catch(() => sendResponse({ status: "failed", error: "查询用户资料服务暂时不可用。" }));
+    return true;
+  }
+  if (message.type === "GET_OPENROUTER_MODELS") {
+    getOpenRouterModels(Boolean(message.forceRefresh)).then(sendResponse).catch((error) => sendResponse({
+      status: "failed", models: [], error: error.message || "无法获取模型目录。"
+    }));
     return true;
   }
   if (message.type === "ANALYZE") {

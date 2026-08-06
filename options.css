@@ -14,6 +14,177 @@
   padding: 2.25rem 2.5rem;
 }
 
+.model-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: .5rem;
+}
+
+.model-candidates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 0;
+  margin: 10px 0 8px;
+}
+
+.model-candidate {
+  display: inline-flex;
+  overflow: hidden;
+  align-items: stretch;
+  max-width: 100%;
+  border: 1px solid var(--tblr-border-color);
+  border-radius: 999px;
+  border-color: var(--candidate-border, var(--tblr-border-color));
+  background: var(--candidate-bg, var(--tblr-bg-surface));
+}
+
+.model-candidate-color-0 { --candidate-bg: #eaf2ff; --candidate-border: #c9dcff; }
+.model-candidate-color-1 { --candidate-bg: #e8f7ef; --candidate-border: #c5ead6; }
+.model-candidate-color-2 { --candidate-bg: #fff3df; --candidate-border: #f6dcae; }
+.model-candidate-color-3 { --candidate-bg: #f3ecff; --candidate-border: #dfcef9; }
+.model-candidate-color-4 { --candidate-bg: #e7f7f8; --candidate-border: #bfe7e9; }
+.model-candidate-color-5 { --candidate-bg: #ffebf1; --candidate-border: #f5cad7; }
+.model-candidate-color-6 { --candidate-bg: #f2f4e5; --candidate-border: #dce2bd; }
+.model-candidate-color-7 { --candidate-bg: #f1eff0; --candidate-border: #dbd5d8; }
+
+.model-candidate-select,
+.model-candidate-remove {
+  border: 0;
+  background: transparent;
+}
+
+.model-candidate-select {
+  overflow: hidden;
+  padding: 5px 4px 5px 11px;
+  color: var(--tblr-body-color);
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-candidate-select:hover,
+.model-candidate-select:focus-visible {
+  color: var(--tblr-primary);
+}
+
+.model-candidate-remove {
+  padding: 4px 9px 4px 5px;
+  color: var(--tblr-secondary-color);
+  font-size: 16px;
+}
+
+.model-candidate-remove:hover,
+.model-candidate-remove:focus-visible {
+  color: var(--tblr-danger);
+}
+
+.model-market-toolbar {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(180px, 240px) auto;
+  gap: 10px;
+}
+
+.model-market-results {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.model-market-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--tblr-border-color);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.model-market-card-header,
+.model-market-card-footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.model-market-identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.model-market-icon {
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  place-items: center;
+  border: 1px solid var(--candidate-border, var(--tblr-border-color));
+  border-radius: 9px;
+  background: var(--candidate-bg, var(--tblr-bg-surface));
+  color: var(--tblr-secondary-color);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.model-market-icon img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 6px;
+  background: #fff;
+  object-fit: contain;
+}
+
+.model-market-card-name,
+.model-market-card-slug {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-market-card-slug {
+  color: var(--tblr-secondary-color);
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.model-market-prices {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  color: var(--tblr-secondary-color);
+  font-size: 12px;
+}
+
+.model-market-published {
+  color: var(--tblr-secondary-color);
+  font-size: 12px;
+}
+
+.model-market-empty {
+  grid-column: 1 / -1;
+  border: 1px dashed var(--tblr-border-color);
+  border-radius: 8px;
+  padding: 28px;
+  color: var(--tblr-secondary-color);
+  text-align: center;
+}
+
+.model-market-more-wrap {
+  display: flex;
+  justify-content: center;
+  padding-top: 16px;
+}
+
 .skip-mid-add-row {
   display: flex;
   gap: 10px;
@@ -199,6 +370,15 @@ code {
 
   .skip-mid-list {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .model-market-toolbar,
+  .model-market-results {
+    grid-template-columns: 1fr;
+  }
+
+  .model-market-toolbar .btn {
+    width: 100%;
   }
 }
 

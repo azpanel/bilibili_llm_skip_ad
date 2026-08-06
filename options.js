@@ -1,3 +1,5 @@
+import { filterModels, formatModelPrices } from "./lib/model-catalog.js";
+
 const DEFAULT_PROMPT = `你是视频跳过片段识别助手。你的唯一任务是：根据视频标题、简介和带时间戳字幕，找出“与视频主线无关、观众跳过后不影响理解视频主要内容”的商业植入/赞助推广片段。
 
 【视频主线】
@@ -71,6 +73,8 @@ D. 从上下文看，该片段与前后主线存在明显切换或可独立跳�
 现在输出 JSON：`;
 const SKIPPED_UPLOADER_MIDS_KEY = "skippedUploaderMids";
 const HIDE_OVERLAY_IN_FULLSCREEN_KEY = "hideOverlayInFullscreen";
+const MODEL_CANDIDATES_KEY = "modelCandidates";
+const MODEL_MARKET_PAGE_SIZE = 40;
 const form = document.querySelector("#settings");
 const keyInput = document.querySelector("#api-key");
 const modelInput = document.querySelector("#model");
@@ -79,6 +83,15 @@ const hideOverlayInFullscreenInput = document.querySelector("#hide-overlay-in-fu
 const skipMidInput = document.querySelector("#skip-mid-input");
 const skipMidError = document.querySelector("#skip-mid-error");
 const skipMidList = document.querySelector("#skip-mid-list");
+const modelCandidatesElement = document.querySelector("#model-candidates");
+const modelMarketElement = document.querySelector("#model-market");
+const modelMarketSearch = document.querySelector("#model-market-search");
+const modelMarketAuthor = document.querySelector("#model-market-author");
+const modelMarketMeta = document.querySelector("#model-market-meta");
+const modelMarketNotice = document.querySelector("#model-market-notice");
+const modelMarketResults = document.querySelector("#model-market-results");
+const loadMoreModelsButton = document.querySelector("#load-more-models");
+const refreshModelMarketButton = document.querySelector("#refresh-model-market");
 const hint = document.querySelector("#key-hint");
 const status = document.querySelector("#status");
 const saveButton = document.querySelector("#save-settings");
@@ -89,6 +102,11 @@ let uploaderProfiles = new Map();
 let loadingUploaderMids = new Set();
 let lastAddedMid = null;
 let statusHideTimer = null;
+let modelCandidates = [];
+let marketModels = [];
+let visibleMarketModels = MODEL_MARKET_PAGE_SIZE;
+let marketLoading = false;
+const modelMarket = tabler.Modal.getOrCreateInstance(modelMarketElement);
 
 function normalizeUploaderMid(value) {
   const trimmed = String(value ?? "").trim();
@@ -105,6 +123,212 @@ function normalizeSkippedUploaderMids(value) {
     if (mid && !mids.includes(mid)) mids.push(mid);
   }
   return mids;
+}
+
+function normalizeModelCandidates(value) {
+  if (!Array.isArray(value)) return [];
+  const candidates = [];
+  for (const item of value) {
+    const slug = typeof item === "string" ? item.trim() : "";
+    if (slug && !candidates.includes(slug)) candidates.push(slug);
+  }
+  return candidates;
+}
+
+function getDeveloperColorIndex(slug) {
+  const developer = String(slug || "").split("/")[0].toLocaleLowerCase();
+  let hash = 0;
+  for (const character of developer) hash = ((hash * 31) + character.codePointAt(0)) >>> 0;
+  return hash % 8;
+}
+
+function formatPublishedDate(value) {
+  if (!value) return "发布时间未知";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "发布时间未知";
+  return `发布于 ${date.toLocaleString("zh-CN", {
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false
+  })}`;
+}
+
+async function persistModelCandidates(nextCandidates) {
+  try {
+    await chrome.storage.local.set({ [MODEL_CANDIDATES_KEY]: nextCandidates });
+    modelCandidates = nextCandidates;
+    renderModelCandidates();
+    renderModelMarketResults();
+    return true;
+  } catch (error) {
+    setStatus(`保存候选模型失败：${getStorageErrorMessage(error)}`, "error");
+    return false;
+  }
+}
+
+function renderModelCandidates() {
+  modelCandidatesElement.replaceChildren();
+  modelCandidates.forEach((slug) => {
+    const chip = document.createElement("span");
+    chip.className = `model-candidate model-candidate-color-${getDeveloperColorIndex(slug)}`;
+    const select = document.createElement("button");
+    select.type = "button";
+    select.className = "model-candidate-select";
+    select.textContent = slug;
+    select.title = `使用模型 ${slug}`;
+    select.addEventListener("click", () => {
+      modelInput.value = slug;
+      clearFieldError(modelInput);
+      modelInput.focus();
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "model-candidate-remove";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", `从候选名单移除 ${slug}`);
+    remove.addEventListener("click", () => persistModelCandidates(modelCandidates.filter((item) => item !== slug)));
+    chip.append(select, remove);
+    modelCandidatesElement.append(chip);
+  });
+}
+
+function setModelMarketNotice(message = "", type = "info") {
+  modelMarketNotice.className = `alert alert-${type}${message ? "" : " d-none"}`;
+  modelMarketNotice.textContent = message;
+}
+
+function updateModelMarketAuthors() {
+  const selected = modelMarketAuthor.value;
+  const counts = new Map();
+  marketModels.forEach((model) => counts.set(model.author, (counts.get(model.author) || 0) + 1));
+  const authors = [...counts.keys()].sort((left, right) => {
+    const leftName = marketModels.find((model) => model.author === left)?.authorName || left;
+    const rightName = marketModels.find((model) => model.author === right)?.authorName || right;
+    return leftName.localeCompare(rightName, "zh-CN");
+  });
+  modelMarketAuthor.replaceChildren(new Option("全部开发者", ""));
+  authors.forEach((author) => {
+    const model = marketModels.find((item) => item.author === author);
+    modelMarketAuthor.append(new Option(`${model?.authorName || author} (${counts.get(author)})`, author));
+  });
+  modelMarketAuthor.value = counts.has(selected) ? selected : "";
+}
+
+function renderModelMarketResults() {
+  if (marketLoading) return;
+  const filtered = filterModels(marketModels, modelMarketSearch.value, modelMarketAuthor.value);
+  const displayed = filtered.slice(0, visibleMarketModels);
+  modelMarketResults.replaceChildren();
+  if (!displayed.length) {
+    const empty = document.createElement("div");
+    empty.className = "model-market-empty";
+    empty.textContent = marketModels.length ? "没有符合搜索或筛选条件的模型。" : "暂无可展示的兼容模型。";
+    modelMarketResults.append(empty);
+  }
+
+  displayed.forEach((model) => {
+    const card = document.createElement("article");
+    card.className = "model-market-card";
+    const header = document.createElement("div");
+    header.className = "model-market-card-header";
+    const identityGroup = document.createElement("div");
+    identityGroup.className = "model-market-identity";
+    const icon = document.createElement("span");
+    icon.className = `model-market-icon model-candidate-color-${getDeveloperColorIndex(model.slug)}`;
+    icon.textContent = (model.authorName || model.author || "?").trim().slice(0, 2).toLocaleUpperCase();
+    icon.setAttribute("aria-hidden", "true");
+    if (model.iconUrl) {
+      const image = document.createElement("img");
+      image.alt = "";
+      image.loading = "lazy";
+      image.decoding = "async";
+      image.referrerPolicy = "no-referrer";
+      image.addEventListener("error", () => image.remove(), { once: true });
+      image.src = model.iconUrl;
+      icon.append(image);
+    }
+    const identity = document.createElement("div");
+    identity.style.minWidth = "0";
+    const name = document.createElement("div");
+    name.className = "model-market-card-name fw-bold";
+    name.textContent = model.name;
+    name.title = model.name;
+    const slug = document.createElement("div");
+    slug.className = "model-market-card-slug";
+    slug.textContent = model.slug;
+    slug.title = model.slug;
+    identity.append(name, slug);
+    identityGroup.append(icon, identity);
+    const author = document.createElement("span");
+    author.className = "badge bg-blue-lt";
+    author.textContent = model.authorName || model.author;
+    header.append(identityGroup, author);
+
+    const prices = document.createElement("div");
+    prices.className = "model-market-prices";
+    formatModelPrices(model).forEach((price) => {
+      const item = document.createElement("span");
+      item.textContent = price;
+      prices.append(item);
+    });
+
+    const published = document.createElement("div");
+    published.className = "model-market-published";
+    published.textContent = formatPublishedDate(model.createdAt);
+
+    const footer = document.createElement("div");
+    footer.className = "model-market-card-footer mt-auto";
+    const context = document.createElement("span");
+    context.className = "text-secondary small";
+    context.textContent = model.contextLength ? `上下文 ${model.contextLength.toLocaleString("en-US")} tokens` : "上下文长度未知";
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "btn btn-sm btn-primary";
+    const alreadyAdded = modelCandidates.includes(model.slug);
+    add.disabled = alreadyAdded;
+    add.textContent = alreadyAdded ? "已添加" : "添加";
+    add.addEventListener("click", () => persistModelCandidates([...modelCandidates, model.slug]));
+    footer.append(context, add);
+    card.append(header, prices, published, footer);
+    modelMarketResults.append(card);
+  });
+
+  loadMoreModelsButton.classList.toggle("d-none", displayed.length >= filtered.length);
+  modelMarketMeta.dataset.count = String(filtered.length);
+  const timestamp = modelMarketMeta.dataset.fetchedAt;
+  modelMarketMeta.textContent = `${filtered.length} 个兼容模型${timestamp ? ` · 更新于 ${timestamp}` : ""}`;
+}
+
+async function loadModelMarket(forceRefresh = false) {
+  if (marketLoading) return;
+  marketLoading = true;
+  refreshModelMarketButton.disabled = true;
+  refreshModelMarketButton.classList.add("btn-loading");
+  modelMarketResults.replaceChildren();
+  const loading = document.createElement("div");
+  loading.className = "model-market-empty";
+  loading.textContent = "正在加载模型目录…";
+  modelMarketResults.append(loading);
+  loadMoreModelsButton.classList.add("d-none");
+  setModelMarketNotice();
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "GET_OPENROUTER_MODELS", forceRefresh });
+    if (result?.status !== "completed") throw new Error(result?.error || "无法获取模型目录。");
+    marketModels = Array.isArray(result.models) ? result.models : [];
+    visibleMarketModels = MODEL_MARKET_PAGE_SIZE;
+    modelMarketMeta.dataset.fetchedAt = result.fetchedAt
+      ? new Date(result.fetchedAt).toLocaleString("zh-CN", { hour12: false })
+      : "";
+    updateModelMarketAuthors();
+    if (result.stale) setModelMarketNotice(`刷新失败，当前显示缓存数据：${result.error || "网络不可用。"}`, "warning");
+  } catch (error) {
+    marketModels = [];
+    modelMarketMeta.dataset.fetchedAt = "";
+    setModelMarketNotice(error.message || "无法获取模型目录，请稍后重试。", "danger");
+  } finally {
+    marketLoading = false;
+    refreshModelMarketButton.disabled = false;
+    refreshModelMarketButton.classList.remove("btn-loading");
+    renderModelMarketResults();
+  }
 }
 
 function activateTab(tabId) {
@@ -380,13 +604,35 @@ skipMidInput.addEventListener("keydown", (event) => {
   event.preventDefault();
   addSkippedUploaderMid();
 });
+document.querySelector("#open-model-market").addEventListener("click", () => {
+  modelMarket.show();
+  if (!marketModels.length) loadModelMarket();
+});
+modelMarketElement.addEventListener("shown.bs.modal", () => modelMarketSearch.focus());
+modelMarketSearch.addEventListener("input", () => {
+  visibleMarketModels = MODEL_MARKET_PAGE_SIZE;
+  renderModelMarketResults();
+});
+modelMarketAuthor.addEventListener("change", () => {
+  visibleMarketModels = MODEL_MARKET_PAGE_SIZE;
+  renderModelMarketResults();
+});
+refreshModelMarketButton.addEventListener("click", () => loadModelMarket(true));
+loadMoreModelsButton.addEventListener("click", () => {
+  visibleMarketModels += MODEL_MARKET_PAGE_SIZE;
+  renderModelMarketResults();
+});
 
 try {
   const [local, sync] = await Promise.all([
-    chrome.storage.local.get("openRouterApiKey"),
+    chrome.storage.local.get(["openRouterApiKey", MODEL_CANDIDATES_KEY]),
     chrome.storage.sync.get(["model", "prompt", SKIPPED_UPLOADER_MIDS_KEY, HIDE_OVERLAY_IN_FULLSCREEN_KEY])
   ]);
   modelInput.value = sync.model || "deepseek/deepseek-chat";
+  const hasStoredCandidates = Object.prototype.hasOwnProperty.call(local, MODEL_CANDIDATES_KEY);
+  modelCandidates = hasStoredCandidates ? normalizeModelCandidates(local[MODEL_CANDIDATES_KEY]) : [modelInput.value];
+  renderModelCandidates();
+  if (!hasStoredCandidates) chrome.storage.local.set({ [MODEL_CANDIDATES_KEY]: modelCandidates }).catch(() => {});
   promptInput.value = sync.prompt || DEFAULT_PROMPT;
   hideOverlayInFullscreenInput.checked = sync[HIDE_OVERLAY_IN_FULLSCREEN_KEY] === true;
   skippedUploaderMids = normalizeSkippedUploaderMids(sync[SKIPPED_UPLOADER_MIDS_KEY]);
@@ -395,6 +641,8 @@ try {
   updateKeyHint(local.openRouterApiKey);
 } catch (error) {
   modelInput.value = "deepseek/deepseek-chat";
+  modelCandidates = [modelInput.value];
+  renderModelCandidates();
   promptInput.value = DEFAULT_PROMPT;
   renderSkippedUploaderMids();
   updateKeyHint();

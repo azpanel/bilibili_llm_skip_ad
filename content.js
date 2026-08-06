@@ -25,6 +25,8 @@
   let preferencesReady = Promise.resolve();
   let renderedSegmentsKey = null;
   let skipped = new Set();
+  let pageCheckTimer = null;
+  let extensionContextInvalidated = false;
 
   chrome.runtime.onMessage.addListener((message) => {
     const activeRun = activeLocalTranscription;
@@ -92,7 +94,45 @@
   }
 
   function send(message) {
+    if (extensionContextInvalidated || !chrome.runtime?.id) {
+      const error = new Error("Extension context invalidated.");
+      error.name = "ExtensionContextInvalidatedError";
+      return Promise.reject(error);
+    }
     return chrome.runtime.sendMessage(message);
+  }
+
+  function isExtensionContextError(error) {
+    return error?.name === "ExtensionContextInvalidatedError"
+      || /extension context invalidated/i.test(String(error?.message || error));
+  }
+
+  function handleAsyncError(error) {
+    if (isExtensionContextError(error)) {
+      extensionContextInvalidated = true;
+      invalidateAnalysisRun();
+      if (pageCheckTimer !== null) {
+        clearInterval(pageCheckTimer);
+        pageCheckTimer = null;
+      }
+      state = {
+        ...state,
+        analysis: "扩展已更新，请刷新当前页面",
+        progressLabel: "旧的扩展页面上下文已失效",
+        progressState: "failed",
+        transcription: null,
+        localPrompt: false
+      };
+      render();
+      return;
+    }
+    console.error("B 站 AI 广告跳过：异步操作失败", error);
+    state = { ...state, analysis: error?.message || "操作失败，请稍后重试", progressLabel: "流程未完成", progressState: "failed" };
+    render();
+  }
+
+  function runAsync(task) {
+    Promise.resolve(task).catch(handleAsyncError);
   }
 
   function isCurrentAnalysisRun(runId, key) {
@@ -291,8 +331,8 @@
       render();
       chrome.storage.local.set({ [AUTO_APPROVE_LOCAL_TRANSCRIPTION_KEY]: event.target.checked }).catch(() => {});
     });
-    panel.querySelector("#bili-ai-retry").addEventListener("click", () => startAnalysis(true));
-    panel.querySelector("#bili-ai-local-confirm").addEventListener("click", () => runLocalTranscription(analysisRunId, currentBvid));
+    panel.querySelector("#bili-ai-retry").addEventListener("click", () => runAsync(startAnalysis(true)));
+    panel.querySelector("#bili-ai-local-confirm").addEventListener("click", () => runAsync(runLocalTranscription(analysisRunId, currentBvid)));
     panel.querySelector("#bili-ai-local-cancel").addEventListener("click", () => {
       state = { ...state, localPrompt: false, analysis: "已取消本次本机识别", progressState: "failed", progressLabel: "流程已取消" };
       render();
@@ -322,12 +362,14 @@
         render();
       }
     });
-    panel.querySelector("#bili-ai-open-settings").addEventListener("click", async () => {
-      const result = await send({ type: "OPEN_OPTIONS" });
-      if (result?.status === "failed") {
-        state = { ...state, analysis: result.error || "无法打开扩展设置页。" };
-        render();
-      }
+    panel.querySelector("#bili-ai-open-settings").addEventListener("click", () => {
+      runAsync((async () => {
+        const result = await send({ type: "OPEN_OPTIONS" });
+        if (result?.status === "failed") {
+          state = { ...state, analysis: result.error || "无法打开扩展设置页。" };
+          render();
+        }
+      })());
     });
     panel.querySelector("#bili-ai-segments").addEventListener("click", (event) => {
       const button = event.target.closest(".bili-ai-segment");
@@ -376,7 +418,7 @@
 
   function savePanelLayout(panel) {
     const rect = panel.getBoundingClientRect();
-    chrome.storage.local.set({ [PANEL_LAYOUT_KEY]: { left: rect.left, top: rect.top, width: rect.width, height: rect.height } });
+    chrome.storage.local.set({ [PANEL_LAYOUT_KEY]: { left: rect.left, top: rect.top, width: rect.width, height: rect.height } }).catch(handleAsyncError);
   }
 
   function constrainPanel(panel) {
@@ -559,7 +601,7 @@
     bindPanelLayout(panel);
     bindOrbLayout(orb);
     render();
-    restorePanelLayout(panel);
+    runAsync(restorePanelLayout(panel));
     restorePreferences(orb);
     const reposition = () => {
       if (state.uiMode === "panel") constrainPanel(panel);
@@ -576,7 +618,7 @@
         if (exiting) {
           // 退出全屏：fixed 面板的定位上下文（含 transform 的播放器容器）已改变，
           // 切换过渡期坐标不可靠。直接恢复进入全屏前保存的布局，避免面板跑位。
-          restorePanelLayout(panel).then(() => requestAnimationFrame(reposition));
+          restorePanelLayout(panel).then(() => requestAnimationFrame(reposition)).catch(handleAsyncError);
           render();
           return;
         }
@@ -592,7 +634,7 @@
     if (state.autoApproveLocalTranscription) {
       state = { ...state, subtitle: "没有可用字幕", analysis: "已自动批准本机识别", progress: 20, progressLabel: "正在启动本机语音识别", progressState: "active", localPrompt: false, debug: { ...state.debug, subtitle: subtitleDebug || state.debug?.subtitle || "" } };
       render();
-      runLocalTranscription(runId, key);
+      runAsync(runLocalTranscription(runId, key));
       return;
     }
     state = { ...state, subtitle: "没有可用字幕", analysis: "等待选择本机识别", progress: 20, progressLabel: "请确认是否使用本机语音识别", progressState: "active", localPrompt: true, debug: { ...state.debug, subtitle: subtitleDebug || state.debug?.subtitle || "" }, uiMode: "panel" };
@@ -806,10 +848,10 @@
     }
     if (identity.key === currentBvid) return;
     ensurePanel();
-    startAnalysis();
+    runAsync(startAnalysis());
   }
 
   ensurePanel();
   checkPage();
-  setInterval(checkPage, 1000);
+  pageCheckTimer = setInterval(checkPage, 1000);
 })();
