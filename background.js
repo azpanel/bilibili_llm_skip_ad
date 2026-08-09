@@ -62,12 +62,13 @@ D. 从上下文看，该片段与前后主线存在明显切换或可独立跳�
 唯一允许的结构：
 {"segments":[]}
 或：
-{"segments":[{"start":12.3,"end":45.6,"reason":"与主线无关的商业推广"}]}
+{"segments":[{"start":"00:12","end":"00:46","reason":"与主线无关的商业推广"}]}
 规则：
 - 顶层只能包含 "segments"
 - "segments" 必须是数组
 - 每个片段只能包含 "start"、"end"、"reason"
-- start、end 必须是数字，不得加引号
+- start、end 必须是与字幕相同格式的时间戳字符串（"MM:SS"；超过一小时用 "HH:MM:SS"）
+- 禁止把时间戳写成小数：例如字幕中的 14:11 必须输出 "14:11"，绝不能输出 14.11
 - end 必须大于 start
 - reason 为简短中文原因
 - 没有明确结果时必须输出 {"segments":[]}
@@ -368,7 +369,7 @@ async function analyze({ bvid, cacheKey = bvid, timeline, duration, force }) {
     model: sync.model,
     temperature: 0,
     messages: [
-      { role: "system", content: sync.prompt || DEFAULT_PROMPT },
+      { role: "system", content: `${sync.prompt || DEFAULT_PROMPT}\n\n【时间戳强制约束】start、end 必须复制为字幕所用的冒号时间戳字符串（如 "14:11"），严禁把 14:11 写成数字 14.11。` },
       { role: "user", content: `视频 BV 号：${bvid}\n\n字幕时间线：\n${timeline}` }
     ]
   };
