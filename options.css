@@ -22,6 +22,184 @@
   margin-bottom: .5rem;
 }
 
+.prompt-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: .5rem;
+}
+
+.prompt-diff-body {
+  padding: 0;
+}
+
+.prompt-diff-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--tblr-border-color);
+  color: var(--tblr-secondary-color);
+  font-size: 12px;
+}
+
+.prompt-diff-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.prompt-diff-swatch {
+  width: 10px;
+  height: 10px;
+  border: 1px solid rgba(31, 35, 40, .12);
+  border-radius: 2px;
+}
+
+.prompt-diff-swatch-remove { background: #ffebe9; }
+.prompt-diff-swatch-add { background: #dafbe1; }
+
+.prompt-diff {
+  overflow: auto;
+  min-height: 180px;
+  max-height: min(68vh, 760px);
+  border-bottom-right-radius: var(--tblr-modal-border-radius);
+  border-bottom-left-radius: var(--tblr-modal-border-radius);
+  background: var(--tblr-bg-surface);
+  font: 12px/20px ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.prompt-diff-line {
+  display: grid;
+  min-width: max-content;
+  grid-template-columns: 48px 48px 24px minmax(640px, 1fr);
+}
+
+.prompt-diff-number {
+  padding: 0 8px;
+  border-right: 1px solid rgba(31, 35, 40, .08);
+  color: #656d76;
+  text-align: right;
+  user-select: none;
+}
+
+.prompt-diff-marker {
+  text-align: center;
+  user-select: none;
+}
+
+.prompt-diff-content {
+  padding-right: 16px;
+  white-space: pre;
+}
+
+.prompt-diff-add { background: #dafbe1; }
+.prompt-diff-add .prompt-diff-number,
+.prompt-diff-add .prompt-diff-marker { background: #ccffd8; }
+.prompt-diff-remove { background: #ffebe9; }
+.prompt-diff-remove .prompt-diff-number,
+.prompt-diff-remove .prompt-diff-marker { background: #ffd7d5; }
+
+.history-heading,
+.history-card,
+.history-uploader,
+.history-usage {
+  display: flex;
+  align-items: center;
+}
+
+.history-heading {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.history-list {
+  display: grid;
+  gap: 10px;
+}
+
+.history-card {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.5fr) minmax(180px, 1fr) auto auto;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--tblr-border-color);
+  border-radius: 8px;
+  background: var(--tblr-bg-surface);
+}
+
+.history-main {
+  min-width: 0;
+}
+
+.history-title {
+  overflow: hidden;
+  margin: 0 0 7px;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-uploader {
+  display: inline-flex;
+  max-width: 60%;
+  gap: 7px;
+  color: var(--tblr-secondary-color);
+  font-size: 12px;
+  vertical-align: middle;
+}
+
+.history-uploader span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-avatar {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  object-fit: cover;
+}
+
+.history-video-link {
+  margin-left: 10px;
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.history-segments {
+  display: flex;
+  align-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.history-segment {
+  cursor: help;
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.history-usage {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--tblr-secondary-color);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.history-usage span:first-child { cursor: help; }
+
+.history-empty {
+  padding: 36px 20px;
+  border: 1px dashed var(--tblr-border-color);
+  border-radius: 8px;
+  color: var(--tblr-secondary-color);
+  text-align: center;
+}
+
 .model-candidates {
   display: flex;
   flex-wrap: wrap;
@@ -379,6 +557,25 @@ code {
 
   .model-market-toolbar .btn {
     width: 100%;
+  }
+
+  .prompt-label-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .history-card {
+    grid-template-columns: 1fr;
+  }
+
+  .history-delete {
+    width: 100%;
+  }
+}
+
+@media (min-width: 561px) and (max-width: 900px) {
+  .history-card {
+    grid-template-columns: minmax(220px, 1fr) auto;
   }
 }
 

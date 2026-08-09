@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { formatTimestamp, normalizeSubtitleBodies, toTimelineText } from "../lib/subtitles.js";
-import { extractJson, normalizeSegments } from "../lib/segments.js";
+import { extractJson, normalizeSegments, parseSegmentTimestamp } from "../lib/segments.js";
 import { filterModels, formatModelPrices, normalizeOpenRouterCatalog } from "../lib/model-catalog.js";
+import { diffLines } from "../lib/text-diff.js";
+import { normalizeHistoryRecord, upsertHistory } from "../lib/history.js";
 
 test("字幕时间线使用可读的时间戳并忽略无效字幕", () => {
   assert.equal(formatTimestamp(3661), "01:01:01");
@@ -39,6 +41,36 @@ test("区间会校验、裁剪、排序并合并相邻广告", () => {
     { start: 30, end: 40, reason: "推广" },
     { start: 90, end: 100, reason: "越界" }
   ]);
+});
+
+test("模型时间戳支持 MM:SS 和 HH:MM:SS，同时兼容旧的秒数", () => {
+  assert.equal(parseSegmentTimestamp("14:11"), 851);
+  assert.equal(parseSegmentTimestamp("01:02:03.5"), 3723.5);
+  assert.equal(parseSegmentTimestamp(14.11), 14.11);
+  assert.ok(Number.isNaN(parseSegmentTimestamp("14:61")));
+  assert.deepEqual(normalizeSegments({ segments: [
+    { start: "14:11", end: "14:41", reason: "游戏联动推广" }
+  ] }, 904), [
+    { start: 851, end: 881, reason: "游戏联动推广" }
+  ]);
+});
+
+test("逐行提示词差异保留行号并标记新增和删除", () => {
+  assert.deepEqual(diffLines("第一行\n旧规则\n相同行", "第一行\n新规则\n相同行"), [
+    { type: "equal", text: "第一行", beforeLine: 1, afterLine: 1 },
+    { type: "add", text: "新规则", beforeLine: null, afterLine: 2 },
+    { type: "remove", text: "旧规则", beforeLine: 2, afterLine: null },
+    { type: "equal", text: "相同行", beforeLine: 3, afterLine: 3 }
+  ]);
+});
+
+test("识别历史只接受含广告的视频并按视频去重更新", () => {
+  assert.equal(normalizeHistoryRecord({ bvid: "BV1demo", segments: [] }), null);
+  const first = normalizeHistoryRecord({ bvid: "BV1demo", title: "视频", segments: [{ start: 10, end: 20, reason: "推广" }], usage: { totalTokens: 100, cost: 0.01 }, recognizedAt: 1 });
+  const updated = normalizeHistoryRecord({ bvid: "BV1demo", title: "新标题", segments: [{ start: 30, end: 40, reason: "赞助" }], recognizedAt: 2 });
+  assert.deepEqual(upsertHistory([first], updated), [updated]);
+  assert.equal(first.id, "bv1demo");
+  assert.equal(first.usage.totalTokens, 100);
 });
 
 test("OpenRouter 目录只保留可用于文本聊天的公开模型", () => {

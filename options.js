@@ -1,4 +1,5 @@
 import { filterModels, formatModelPrices } from "./lib/model-catalog.js";
+import { diffLines } from "./lib/text-diff.js";
 
 const DEFAULT_PROMPT = `你是视频跳过片段识别助手。你的唯一任务是：根据视频标题、简介和带时间戳字幕，找出“与视频主线无关、观众跳过后不影响理解视频主要内容”的商业植入/赞助推广片段。
 
@@ -80,6 +81,13 @@ const form = document.querySelector("#settings");
 const keyInput = document.querySelector("#api-key");
 const modelInput = document.querySelector("#model");
 const promptInput = document.querySelector("#prompt");
+const promptDiffElement = document.querySelector("#prompt-diff");
+const promptDiffSummary = document.querySelector("#prompt-diff-summary");
+const promptDiffModalElement = document.querySelector("#prompt-diff-modal");
+const historyList = document.querySelector("#history-list");
+const historyNotice = document.querySelector("#history-notice");
+const deleteHistoryModalElement = document.querySelector("#delete-history-modal");
+const confirmDeleteHistoryButton = document.querySelector("#confirm-delete-history");
 const hideOverlayInFullscreenInput = document.querySelector("#hide-overlay-in-fullscreen");
 const skipMidInput = document.querySelector("#skip-mid-input");
 const skipMidError = document.querySelector("#skip-mid-error");
@@ -107,7 +115,157 @@ let modelCandidates = [];
 let marketModels = [];
 let visibleMarketModels = MODEL_MARKET_PAGE_SIZE;
 let marketLoading = false;
+let historyRecords = [];
+let historyLoaded = false;
+let pendingHistoryDelete = null;
 const modelMarket = tabler.Modal.getOrCreateInstance(modelMarketElement);
+const promptDiffModal = tabler.Modal.getOrCreateInstance(promptDiffModalElement);
+const deleteHistoryModal = tabler.Modal.getOrCreateInstance(deleteHistoryModalElement);
+
+function formatHistoryTime(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor(total % 3600 / 60);
+  const rest = total % 60;
+  return hours
+    ? `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`
+    : `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+}
+
+function formatTokenCount(value) {
+  return Number.isFinite(value) ? new Intl.NumberFormat("zh-CN").format(value) : "未知";
+}
+
+function formatCost(value) {
+  if (!Number.isFinite(value)) return "未知";
+  return `$${value.toFixed(value < 0.01 ? 6 : 4)}`;
+}
+
+function renderHistory() {
+  historyList.replaceChildren();
+  if (!historyRecords.length) {
+    const empty = document.createElement("div");
+    empty.className = "history-empty";
+    empty.textContent = "还没有识别到广告的视频记录。";
+    historyList.append(empty);
+    return;
+  }
+
+  for (const record of historyRecords) {
+    const card = document.createElement("article");
+    card.className = "history-card";
+    const main = document.createElement("div");
+    main.className = "history-main";
+    const title = document.createElement("h3");
+    title.className = "history-title";
+    title.textContent = record.title || record.bvid || `av${record.aid}`;
+    title.title = title.textContent;
+    const uploader = document.createElement("div");
+    uploader.className = "history-uploader";
+    const avatar = document.createElement(record.uploaderFace ? "img" : "span");
+    avatar.className = "history-avatar avatar avatar-sm rounded-circle bg-blue-lt";
+    if (record.uploaderFace) {
+      avatar.src = record.uploaderFace;
+      avatar.alt = "";
+      avatar.referrerPolicy = "no-referrer";
+    } else {
+      avatar.textContent = (record.uploaderName || "UP").slice(0, 1);
+    }
+    const uploaderName = document.createElement("span");
+    uploaderName.textContent = record.uploaderName || "未知 UP 主";
+    uploader.append(avatar, uploaderName);
+    const videoLink = document.createElement("a");
+    videoLink.className = "history-video-link";
+    videoLink.href = `https://www.bilibili.com/video/${encodeURIComponent(record.bvid || `av${record.aid}`)}`;
+    videoLink.target = "_blank";
+    videoLink.rel = "noopener noreferrer";
+    videoLink.textContent = record.bvid || `av${record.aid}`;
+    main.append(title, uploader, videoLink);
+
+    const segments = document.createElement("div");
+    segments.className = "history-segments";
+    for (const segment of record.segments || []) {
+      const badge = document.createElement("span");
+      badge.className = "badge bg-orange-lt history-segment";
+      badge.textContent = `${formatHistoryTime(segment.start)}–${formatHistoryTime(segment.end)}`;
+      badge.title = segment.reason || "广告或推广内容";
+      badge.setAttribute("data-bs-toggle", "tooltip");
+      badge.setAttribute("data-bs-placement", "top");
+      segments.append(badge);
+      tabler.Tooltip.getOrCreateInstance(badge);
+    }
+
+    const usage = document.createElement("div");
+    usage.className = "history-usage";
+    const token = document.createElement("span");
+    token.innerHTML = '<i class="ti ti-coins" aria-hidden="true"></i>';
+    token.append(` ${formatTokenCount(record.usage?.totalTokens)} tokens`);
+    token.title = `输入 ${formatTokenCount(record.usage?.promptTokens)} · 输出 ${formatTokenCount(record.usage?.completionTokens)}`;
+    token.setAttribute("data-bs-toggle", "tooltip");
+    const cost = document.createElement("span");
+    cost.innerHTML = '<i class="ti ti-currency-dollar" aria-hidden="true"></i>';
+    cost.append(` ${formatCost(record.usage?.cost)}`);
+    usage.append(token, cost);
+    tabler.Tooltip.getOrCreateInstance(token);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "btn btn-sm btn-outline-danger history-delete";
+    remove.innerHTML = '<i class="ti ti-trash me-1" aria-hidden="true"></i>删除';
+    remove.addEventListener("click", () => {
+      pendingHistoryDelete = record.id;
+      deleteHistoryModal.show();
+    });
+    card.append(main, segments, usage, remove);
+    historyList.append(card);
+  }
+}
+
+async function loadHistory(force = false) {
+  if (historyLoaded && !force) return;
+  historyNotice.classList.add("d-none");
+  historyList.innerHTML = '<div class="history-empty"><span class="spinner-border spinner-border-sm me-2"></span>正在读取识别历史…</div>';
+  const result = await chrome.runtime.sendMessage({ type: "GET_ANALYSIS_HISTORY" });
+  if (result?.status !== "completed") {
+    historyNotice.textContent = result?.error || "无法读取识别历史。";
+    historyNotice.className = "alert alert-danger";
+    historyList.replaceChildren();
+    return;
+  }
+  historyRecords = Array.isArray(result.records) ? result.records : [];
+  historyLoaded = true;
+  renderHistory();
+}
+
+function renderPromptDiff() {
+  const lines = diffLines(DEFAULT_PROMPT, promptInput.value);
+  const added = lines.filter((line) => line.type === "add").length;
+  const removed = lines.filter((line) => line.type === "remove").length;
+  promptDiffSummary.textContent = added || removed
+    ? `${added} 行新增，${removed} 行删除`
+    : "当前提示词与插件默认提示词完全一致";
+  promptDiffElement.replaceChildren();
+
+  for (const line of lines) {
+    const row = document.createElement("div");
+    row.className = `prompt-diff-line prompt-diff-${line.type}`;
+    row.setAttribute("role", "row");
+    const beforeNumber = document.createElement("span");
+    beforeNumber.className = "prompt-diff-number";
+    beforeNumber.textContent = line.beforeLine ?? "";
+    const afterNumber = document.createElement("span");
+    afterNumber.className = "prompt-diff-number";
+    afterNumber.textContent = line.afterLine ?? "";
+    const marker = document.createElement("span");
+    marker.className = "prompt-diff-marker";
+    marker.textContent = line.type === "add" ? "+" : line.type === "remove" ? "−" : " ";
+    const content = document.createElement("span");
+    content.className = "prompt-diff-content";
+    content.textContent = line.text || " ";
+    row.append(beforeNumber, afterNumber, marker, content);
+    promptDiffElement.append(row);
+  }
+}
 
 function normalizeUploaderMid(value) {
   const trimmed = String(value ?? "").trim();
@@ -609,6 +767,10 @@ document.querySelector("#open-model-market").addEventListener("click", () => {
   modelMarket.show();
   if (!marketModels.length) loadModelMarket();
 });
+document.querySelector("#compare-prompt").addEventListener("click", () => {
+  renderPromptDiff();
+  promptDiffModal.show();
+});
 modelMarketElement.addEventListener("shown.bs.modal", () => modelMarketSearch.focus());
 modelMarketSearch.addEventListener("input", () => {
   visibleMarketModels = MODEL_MARKET_PAGE_SIZE;
@@ -623,6 +785,28 @@ loadMoreModelsButton.addEventListener("click", () => {
   visibleMarketModels += MODEL_MARKET_PAGE_SIZE;
   renderModelMarketResults();
 });
+document.querySelector("#tab-history").addEventListener("shown.bs.tab", () => loadHistory());
+document.querySelector("#refresh-history").addEventListener("click", () => loadHistory(true));
+confirmDeleteHistoryButton.addEventListener("click", async () => {
+  if (!pendingHistoryDelete) return;
+  confirmDeleteHistoryButton.disabled = true;
+  confirmDeleteHistoryButton.classList.add("btn-loading");
+  const id = pendingHistoryDelete;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "DELETE_ANALYSIS_HISTORY", id });
+    if (result?.status !== "completed") throw new Error(result?.error || "删除失败。");
+    historyRecords = historyRecords.filter((record) => record.id !== id);
+    pendingHistoryDelete = null;
+    deleteHistoryModal.hide();
+    renderHistory();
+  } catch (error) {
+    setStatus(error.message || "删除识别记录失败。", "error");
+  } finally {
+    confirmDeleteHistoryButton.disabled = false;
+    confirmDeleteHistoryButton.classList.remove("btn-loading");
+  }
+});
+deleteHistoryModalElement.addEventListener("hidden.bs.modal", () => { pendingHistoryDelete = null; });
 
 try {
   const [local, sync] = await Promise.all([

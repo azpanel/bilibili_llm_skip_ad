@@ -42,6 +42,11 @@
                 <i class="ti ti-layout me-1" aria-hidden="true"></i>界面设置
               </button>
             </li>
+            <li class="nav-item" role="presentation">
+              <button id="tab-history" class="nav-link" type="button" role="tab" data-bs-toggle="tab" data-bs-target="#panel-history" aria-controls="panel-history" aria-selected="false" data-tab="history">
+                <i class="ti ti-history me-1" aria-hidden="true"></i>识别历史
+              </button>
+            </li>
           </ul>
         </div>
 
@@ -81,7 +86,12 @@
                 </div>
 
                 <div class="mb-3">
-                  <label for="prompt" class="form-label">识别广告提示词</label>
+                  <div class="prompt-label-row">
+                    <label for="prompt" class="form-label mb-0">识别广告提示词</label>
+                    <button id="compare-prompt" type="button" class="btn btn-sm btn-outline-secondary">
+                      <i class="ti ti-arrows-diff me-1" aria-hidden="true"></i>与默认提示词对比
+                    </button>
+                  </div>
                   <textarea id="prompt" name="prompt" class="form-control" rows="12" required aria-describedby="prompt-help"></textarea>
                   <p id="prompt-help" class="form-hint">请保留 JSON 输出格式要求，否则扩展可能无法识别可跳过时间段。</p>
                 </div>
@@ -132,6 +142,20 @@
                   <p class="form-hint">进入全屏后隐藏完整面板和圆形悬浮球，退出全屏时自动恢复。</p>
                 </div>
               </div>
+
+              <div id="panel-history" class="tab-pane fade" role="tabpanel" aria-labelledby="tab-history" data-panel="history">
+                <div class="mb-4 history-heading">
+                  <div>
+                    <h2 class="mb-1">识别历史</h2>
+                    <p class="text-secondary mb-0">仅记录识别到广告的视频，数据保存在当前设备。</p>
+                  </div>
+                  <button id="refresh-history" type="button" class="btn btn-sm btn-outline-secondary">
+                    <i class="ti ti-refresh me-1" aria-hidden="true"></i>刷新
+                  </button>
+                </div>
+                <div id="history-notice" class="alert d-none" role="status"></div>
+                <div id="history-list" class="history-list" aria-live="polite"></div>
+              </div>
             </div>
           </div>
 
@@ -180,6 +204,45 @@
           <div class="model-market-more-wrap">
             <button id="load-more-models" type="button" class="btn btn-outline-secondary d-none">加载更多</button>
           </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="prompt-diff-modal" class="modal modal-blur fade" tabindex="-1" role="dialog" aria-labelledby="prompt-diff-title" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable" role="document">
+      <div class="modal-content">
+        <div class="modal-header">
+          <div>
+            <h2 id="prompt-diff-title" class="modal-title">提示词差异</h2>
+            <div id="prompt-diff-summary" class="text-secondary small mt-1"></div>
+          </div>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+        </div>
+        <div class="modal-body prompt-diff-body">
+          <div class="prompt-diff-legend" aria-hidden="true">
+            <span><i class="prompt-diff-swatch prompt-diff-swatch-remove"></i>插件默认提示词</span>
+            <span><i class="prompt-diff-swatch prompt-diff-swatch-add"></i>当前提示词</span>
+          </div>
+          <div id="prompt-diff" class="prompt-diff" role="table" aria-label="当前提示词与插件默认提示词的逐行差异"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="delete-history-modal" class="modal modal-blur fade" tabindex="-1" role="dialog" aria-labelledby="delete-history-title" aria-hidden="true">
+    <div class="modal-dialog modal-sm modal-dialog-centered" role="document">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 id="delete-history-title" class="modal-title">删除识别记录？</h2>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+        </div>
+        <div class="modal-body">
+          <p class="mb-0">此操作只删除本地历史记录，不会影响视频或已缓存的分析结果。</p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn me-auto" data-bs-dismiss="modal">取消</button>
+          <button id="confirm-delete-history" type="button" class="btn btn-danger">确认删除</button>
         </div>
       </div>
     </div>
