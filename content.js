@@ -27,6 +27,8 @@
   let skipped = new Set();
   let pageCheckTimer = null;
   let extensionContextInvalidated = false;
+  let preferredPanelLayout = null;
+  let panelLayoutReady = false;
 
   chrome.runtime.onMessage.addListener((message) => {
     const activeRun = activeLocalTranscription;
@@ -256,6 +258,11 @@
     const overlayHidden = state.hideOverlayInFullscreen && Boolean(document.fullscreenElement);
     panel.hidden = overlayHidden || state.uiMode !== "panel";
     orb.hidden = overlayHidden || state.uiMode !== "orb";
+    if (!panel.hidden && panelLayoutReady && !preferredPanelLayout) {
+      requestAnimationFrame(() => {
+        if (!panel.hidden && !preferredPanelLayout) savePanelLayout(panel);
+      });
+    }
     orb.className = `bili-ai-orb bili-ai-orb-${state.localPrompt ? "attention" : state.progressState}`;
     orb.style.setProperty("--bili-ai-orb-progress", `${progress * 3.6}deg`);
     orb.setAttribute("aria-label", orbLabel(progress));
@@ -418,20 +425,25 @@
 
   function savePanelLayout(panel) {
     const rect = panel.getBoundingClientRect();
-    chrome.storage.local.set({ [PANEL_LAYOUT_KEY]: { left: rect.left, top: rect.top, width: rect.width, height: rect.height } }).catch(handleAsyncError);
+    preferredPanelLayout = { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+    chrome.storage.local.set({ [PANEL_LAYOUT_KEY]: preferredPanelLayout }).catch(handleAsyncError);
+  }
+
+  function applyPanelLayout(panel, layout) {
+    const bounds = viewportBounds();
+    const width = clamp(layout.width, 240, bounds.width);
+    const height = clamp(layout.height, 160, bounds.height);
+    panel.style.width = `${width}px`;
+    panel.style.height = `${height}px`;
+    panel.style.left = `${clamp(layout.left, bounds.left, bounds.left + bounds.width - width)}px`;
+    panel.style.top = `${clamp(layout.top, bounds.top, bounds.top + bounds.height - height)}px`;
+    panel.style.right = "auto";
+    panel.style.bottom = "auto";
   }
 
   function constrainPanel(panel) {
-    const bounds = viewportBounds();
     const rect = panel.getBoundingClientRect();
-    const width = clamp(rect.width, 240, bounds.width);
-    const height = clamp(rect.height, 160, bounds.height);
-    panel.style.width = `${width}px`;
-    panel.style.height = `${height}px`;
-    panel.style.left = `${clamp(rect.left, bounds.left, bounds.left + bounds.width - width)}px`;
-    panel.style.top = `${clamp(rect.top, bounds.top, bounds.top + bounds.height - height)}px`;
-    panel.style.right = "auto";
-    panel.style.bottom = "auto";
+    applyPanelLayout(panel, preferredPanelLayout || { left: rect.left, top: rect.top, width: rect.width, height: rect.height });
   }
 
   function bindPanelLayout(panel) {
@@ -471,17 +483,16 @@
   }
 
   async function restorePanelLayout(panel) {
-    const { [PANEL_LAYOUT_KEY]: layout } = await chrome.storage.local.get(PANEL_LAYOUT_KEY);
-    if (!layout) return;
-    const bounds = viewportBounds();
-    const width = clamp(layout.width, 240, bounds.width);
-    const height = clamp(layout.height, 160, bounds.height);
-    panel.style.width = `${width}px`;
-    panel.style.height = `${height}px`;
-    panel.style.left = `${clamp(layout.left, bounds.left, bounds.left + bounds.width - width)}px`;
-    panel.style.top = `${clamp(layout.top, bounds.top, bounds.top + bounds.height - height)}px`;
-    panel.style.right = "auto";
-    panel.style.bottom = "auto";
+    let layout = preferredPanelLayout;
+    if (!layout) {
+      ({ [PANEL_LAYOUT_KEY]: layout } = await chrome.storage.local.get(PANEL_LAYOUT_KEY));
+      if (layout) preferredPanelLayout = { ...layout };
+    }
+    panelLayoutReady = true;
+    if (layout) applyPanelLayout(panel, layout);
+    else if (!panel.hidden) requestAnimationFrame(() => {
+      if (!preferredPanelLayout) savePanelLayout(panel);
+    });
   }
 
   function placeOrb(orb, layout = {}) {
