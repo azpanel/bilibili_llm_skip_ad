@@ -2,6 +2,7 @@ import { normalizeSubtitleBodies, toTimelineText } from "./lib/subtitles.js";
 import { extractJson, normalizeSegments } from "./lib/segments.js";
 
 import { normalizeOpenRouterCatalog } from "./lib/model-catalog.js";
+import { ANALYSIS_HISTORY_KEY, normalizeHistoryRecord, upsertHistory } from "./lib/history.js";
 
 const DEFAULT_PROMPT = `你是视频跳过片段识别助手。你的唯一任务是：根据视频标题、简介和带时间戳字幕，找出“与视频主线无关、观众跳过后不影响理解视频主要内容”的商业植入/赞助推广片段。
 
@@ -92,6 +93,42 @@ const OPENROUTER_CATALOG_CACHE_TTL = 6 * 60 * 60 * 1000;
 const OPENROUTER_CATALOG_REQUEST_TIMEOUT = 20000;
 const uploaderProfileRequests = new Map();
 let openRouterCatalogRequest = null;
+let historyWrite = Promise.resolve();
+
+function normalizeUsage(usage) {
+  return {
+    promptTokens: Number.isFinite(Number(usage?.prompt_tokens)) ? Number(usage.prompt_tokens) : null,
+    completionTokens: Number.isFinite(Number(usage?.completion_tokens)) ? Number(usage.completion_tokens) : null,
+    totalTokens: Number.isFinite(Number(usage?.total_tokens)) ? Number(usage.total_tokens) : null,
+    cost: Number.isFinite(Number(usage?.cost)) ? Number(usage.cost) : null
+  };
+}
+
+function saveAnalysisHistory(metadata, segments, usage) {
+  const record = normalizeHistoryRecord({ ...metadata, segments, usage, recognizedAt: Date.now() });
+  if (!record) return Promise.resolve();
+  historyWrite = historyWrite.then(async () => {
+    const stored = await chrome.storage.local.get(ANALYSIS_HISTORY_KEY);
+    await chrome.storage.local.set({ [ANALYSIS_HISTORY_KEY]: upsertHistory(stored[ANALYSIS_HISTORY_KEY], record) });
+  });
+  return historyWrite;
+}
+
+async function getAnalysisHistory() {
+  await historyWrite;
+  const stored = await chrome.storage.local.get(ANALYSIS_HISTORY_KEY);
+  return { status: "completed", records: Array.isArray(stored[ANALYSIS_HISTORY_KEY]) ? stored[ANALYSIS_HISTORY_KEY] : [] };
+}
+
+async function deleteAnalysisHistory(id) {
+  historyWrite = historyWrite.then(async () => {
+    const stored = await chrome.storage.local.get(ANALYSIS_HISTORY_KEY);
+    const records = Array.isArray(stored[ANALYSIS_HISTORY_KEY]) ? stored[ANALYSIS_HISTORY_KEY] : [];
+    await chrome.storage.local.set({ [ANALYSIS_HISTORY_KEY]: records.filter((record) => record?.id !== id) });
+  });
+  await historyWrite;
+  return { status: "completed" };
+}
 
 async function fetchOpenRouterCatalog() {
   const controller = new AbortController();
@@ -358,9 +395,13 @@ async function fetchSubtitles(request) {
   return { status: "no-subtitles", debug: `发现 ${subtitles.length} 个字幕候选，但均不可用：${downloadError}` };
 }
 
-async function analyze({ bvid, cacheKey = bvid, timeline, duration, force }) {
+async function analyze({ bvid, cacheKey = bvid, timeline, duration, force, metadata = {} }) {
   const cached = await chrome.storage.session.get(`analysis:${cacheKey}`);
-  if (!force && cached[`analysis:${cacheKey}`]) return { ...cached[`analysis:${cacheKey}`], cached: true };
+  if (!force && cached[`analysis:${cacheKey}`]) {
+    const result = cached[`analysis:${cacheKey}`];
+    if (result.segments?.length) await saveAnalysisHistory(metadata, result.segments, result.usage);
+    return { ...result, cached: true };
+  }
 
   const [local, sync] = await Promise.all([chrome.storage.local.get("openRouterApiKey"), chrome.storage.sync.get(["model", "prompt"])]);
   if (!local.openRouterApiKey || !sync.model) return { status: "needs-settings" };
@@ -388,8 +429,10 @@ async function analyze({ bvid, cacheKey = bvid, timeline, duration, force }) {
     const content = message?.content;
     const reasoningDebug = typeof message?.reasoning === "string" ? message.reasoning : "";
     const segments = normalizeSegments(extractJson(content), duration);
-    const result = { status: "completed", segments, requestDebug, responseDebug: responseText, reasoningDebug };
+    const usage = normalizeUsage(payload?.usage);
+    const result = { status: "completed", segments, usage, requestDebug, responseDebug: responseText, reasoningDebug };
     await chrome.storage.session.set({ [`analysis:${cacheKey}`]: result });
+    if (segments.length) await saveAnalysisHistory(metadata, segments, usage);
     return result;
   } catch (error) {
     return { status: "failed", error: error.message || "AI 分析失败。", requestDebug, responseDebug: responseText };
@@ -419,6 +462,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message.type === "GET_UPLOADER_PROFILES") {
     getUploaderProfiles(message.mids, Boolean(message.forceRefresh)).then(sendResponse).catch(() => sendResponse({ status: "failed", error: "查询用户资料服务暂时不可用。" }));
+    return true;
+  }
+  if (message.type === "GET_ANALYSIS_HISTORY") {
+    getAnalysisHistory().then(sendResponse).catch((error) => sendResponse({ status: "failed", records: [], error: error.message || "无法读取识别历史。" }));
+    return true;
+  }
+  if (message.type === "DELETE_ANALYSIS_HISTORY") {
+    deleteAnalysisHistory(message.id).then(sendResponse).catch((error) => sendResponse({ status: "failed", error: error.message || "无法删除识别历史。" }));
     return true;
   }
   if (message.type === "GET_OPENROUTER_MODELS") {
