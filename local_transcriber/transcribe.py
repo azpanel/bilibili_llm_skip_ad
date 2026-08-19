@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import queue
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -102,7 +103,14 @@ class Transcriber:
 
     @staticmethod
     def _convert(source: Path, target: Path) -> None:
-        command = ["ffmpeg", "-y", "-i", str(source), "-map", "0:a:0", "-ac", "1", "-ar", "16000", "-f", "wav", str(target)]
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg is None:
+            try:
+                import imageio_ffmpeg
+                ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+            except (ImportError, RuntimeError) as exc:
+                raise TranscriptionError("FFmpeg 不可用，请重新运行启动脚本安装依赖") from exc
+        command = [ffmpeg, "-y", "-i", str(source), "-map", "0:a:0", "-ac", "1", "-ar", "16000", "-f", "wav", str(target)]
         completed = subprocess.run(command, capture_output=True, text=True, timeout=600)
         if completed.returncode:
             raise TranscriptionError(f"FFmpeg 转码失败：{completed.stderr[-500:]}")
