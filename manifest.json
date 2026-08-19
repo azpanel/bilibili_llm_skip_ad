@@ -3,6 +3,12 @@
   "name": "B 站 AI 广告跳过",
   "version": "1.0.0",
   "description": "通过视频字幕识别并自动跳过 B 站视频中的广告片段。",
+  "icons": {
+    "16": "bilibili_llm_skip_ad_icon.png",
+    "32": "bilibili_llm_skip_ad_icon.png",
+    "48": "bilibili_llm_skip_ad_icon.png",
+    "128": "bilibili_llm_skip_ad_icon.png"
+  },
   "permissions": ["storage"],
   "host_permissions": [
     "https://api.bilibili.com/*",
