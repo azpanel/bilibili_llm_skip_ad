@@ -595,6 +595,30 @@
     }
 }
 
+.bpx-player-progress-schedule-wrap > .bili-ai-progress-markers {
+    position: absolute;
+    inset: 0;
+    z-index: 4;
+    overflow: hidden;
+    border-radius: inherit;
+    pointer-events: none
+}
+
+.bili-ai-progress-ad-marker {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    min-width: 2px;
+    opacity: .95;
+    background: #ff4d4f
+}
+
+.bili-ai-progress-ad-marker[data-color="1"] { background: #ff9f1c }
+.bili-ai-progress-ad-marker[data-color="2"] { background: #a855f7 }
+.bili-ai-progress-ad-marker[data-color="3"] { background: #00b8d9 }
+.bili-ai-progress-ad-marker[data-color="4"] { background: #f43f8c }
+.bili-ai-progress-ad-marker[data-color="5"] { background: #84cc16 }
+
 @media (max-width:420px) {
     #bili-ai-ad-skip-panel {
         width: calc(100vw - 24px);

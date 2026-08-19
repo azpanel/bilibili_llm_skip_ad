@@ -261,7 +261,48 @@
     });
   }
 
+  function renderProgressMarkers() {
+    const video = document.querySelector("video");
+    const duration = Number(video?.duration);
+    const schedules = [...document.querySelectorAll(".bpx-player-progress-schedule-wrap")];
+
+    document.querySelectorAll(".bili-ai-progress-markers").forEach((markers) => {
+      if (!schedules.includes(markers.parentElement)) markers.remove();
+    });
+
+    schedules.forEach((schedule) => {
+      let markers = schedule.querySelector(":scope > .bili-ai-progress-markers");
+      if (!markers) {
+        markers = document.createElement("div");
+        markers.className = "bili-ai-progress-markers";
+        markers.setAttribute("aria-hidden", "true");
+        schedule.append(markers);
+      }
+
+      const markerKey = Number.isFinite(duration) && duration > 0
+        ? JSON.stringify([duration, state.segments])
+        : "";
+      if (markers.dataset.markerKey === markerKey) return;
+      markers.dataset.markerKey = markerKey;
+      markers.replaceChildren();
+      if (!markerKey) return;
+
+      state.segments.forEach((segment, index) => {
+        const start = Math.max(0, Math.min(duration, Number(segment.start) || 0));
+        const end = Math.max(start, Math.min(duration, Number(segment.end) || 0));
+        if (end <= start) return;
+        const marker = document.createElement("span");
+        marker.className = "bili-ai-progress-ad-marker";
+        marker.dataset.color = String(index % 6);
+        marker.style.left = `${start / duration * 100}%`;
+        marker.style.width = `${(end - start) / duration * 100}%`;
+        markers.append(marker);
+      });
+    });
+  }
+
   function render() {
+    renderProgressMarkers();
     const panel = document.getElementById(PANEL_ID);
     const orb = document.getElementById(ORB_ID);
     if (!panel || !orb) return;
@@ -863,6 +904,7 @@
   }, true);
 
   function checkPage() {
+    renderProgressMarkers();
     const identity = getVideoIdentity();
     if (!identity.key) {
       if (currentBvid) {
