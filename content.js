@@ -8,6 +8,7 @@
   const PLAYER_READY_WAIT_TIMEOUT = 10_000;
   const SUBTITLE_CONTROL_WAIT_TIMEOUT = 5_000;
   let toastTimer = null;
+  let toastRemovalTimer = null;
   let currentBvid = null;
   let analysisRunId = 0;
   let cancelElementWait = null;
@@ -449,18 +450,25 @@
 
   function showSavedTime(seconds) {
     const savedSeconds = Math.max(1, Math.round(seconds));
+    const toastHost = document.getElementById(ROOT_ID) || document.fullscreenElement || document.documentElement;
     let toast = document.getElementById(TOAST_ID);
     if (!toast) {
       toast = document.createElement("aside");
       toast.id = TOAST_ID;
-      document.documentElement.append(toast);
     }
+    // The extension root follows the active fullscreen element. Keeping the
+    // toast inside it makes the notification visible in both normal and
+    // fullscreen playback.
+    if (toast.parentElement !== toastHost) toastHost.append(toast);
     clearTimeout(toastTimer);
+    clearTimeout(toastRemovalTimer);
     toast.textContent = `已跳过广告，为你节省 ${savedSeconds} 秒`;
+    toast.setAttribute("role", "status");
+    toast.setAttribute("aria-live", "polite");
     toast.classList.remove("bili-ai-toast-hide");
     toastTimer = setTimeout(() => {
       toast.classList.add("bili-ai-toast-hide");
-      setTimeout(() => toast.remove(), 250);
+      toastRemovalTimer = setTimeout(() => toast.remove(), 250);
     }, 3000);
   }
 
