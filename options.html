@@ -33,6 +33,11 @@
               </button>
             </li>
             <li class="nav-item" role="presentation">
+              <button id="tab-prompt" class="nav-link" type="button" role="tab" data-bs-toggle="tab" data-bs-target="#panel-prompt" aria-controls="panel-prompt" aria-selected="false" data-tab="prompt">
+                <i class="ti ti-message-code me-1" aria-hidden="true"></i>提示词
+              </button>
+            </li>
+            <li class="nav-item" role="presentation">
               <button id="tab-skip-users" class="nav-link" type="button" role="tab" data-bs-toggle="tab" data-bs-target="#panel-skip-users" aria-controls="panel-skip-users" aria-selected="false" data-tab="skip-users">
                 <i class="ti ti-user-off me-1" aria-hidden="true"></i>跳过用户
               </button>
@@ -40,6 +45,11 @@
             <li class="nav-item" role="presentation">
               <button id="tab-interface" class="nav-link" type="button" role="tab" data-bs-toggle="tab" data-bs-target="#panel-interface" aria-controls="panel-interface" aria-selected="false" data-tab="interface">
                 <i class="ti ti-layout me-1" aria-hidden="true"></i>界面设置
+              </button>
+            </li>
+            <li class="nav-item" role="presentation">
+              <button id="tab-statistics" class="nav-link" type="button" role="tab" data-bs-toggle="tab" data-bs-target="#panel-statistics" aria-controls="panel-statistics" aria-selected="false" data-tab="statistics">
+                <i class="ti ti-chart-line me-1" aria-hidden="true"></i>统计分析
               </button>
             </li>
             <li class="nav-item" role="presentation">
@@ -82,6 +92,28 @@
               <div id="panel-rules" class="tab-pane fade" role="tabpanel" aria-labelledby="tab-rules" data-panel="rules">
                 <div class="mb-4">
                   <h2 class="mb-1">识别规则</h2>
+                  <p class="text-secondary">控制不同视频时长使用的字幕检查范围与执行方式。</p>
+                </div>
+
+                <section class="duration-rules mb-4" aria-labelledby="duration-rules-title">
+                  <div class="duration-threshold-row">
+                    <div><h3 id="duration-rules-title" class="mb-1">按视频时长选择检查范围</h3><p class="text-secondary mb-0">较短视频完整检查；较长视频按下方策略控制字幕量与模型请求次数。</p></div>
+                    <label class="duration-number" for="duration-threshold"><span>完整检查阈值</span><span class="input-group input-group-flat"><input id="duration-threshold" class="form-control" type="number" min="1" max="1440" step="1" inputmode="numeric"><span class="input-group-text">分钟</span></span></label>
+                  </div>
+                  <div id="duration-rule-preview" class="duration-rule-preview" data-mode="chunks" aria-live="polite"><strong></strong><i class="ti ti-arrow-right" aria-hidden="true"></i><span></span></div>
+                  <fieldset class="long-video-options">
+                    <legend class="form-label">超过阈值后</legend>
+                    <label class="long-video-option" data-mode="full"><input type="radio" name="longVideoMode" value="full"><span class="option-icon"><i class="ti ti-file-text"></i></span><span><b>仍全量检查</b><small>完整字幕一次发送给模型</small></span></label>
+                    <label class="long-video-option" data-mode="headTail"><input type="radio" name="longVideoMode" value="headTail"><span class="option-icon"><i class="ti ti-arrows-horizontal"></i></span><span><b>仅检查首尾</b><small>覆盖常见的片头与片尾广告</small><span class="long-video-parameter" data-mode="headTail"><input id="head-tail-minutes" class="form-control form-control-sm" type="number" min="1" max="1440" step="1" inputmode="numeric"><em>首尾各分钟</em></span></span></label>
+                    <label class="long-video-option" data-mode="chunks"><input type="radio" name="longVideoMode" value="chunks" checked><span class="option-icon"><i class="ti ti-slice"></i></span><span><b>逐片检查</b><small>按顺序检查，检出广告后停止</small><span class="long-video-parameter" data-mode="chunks"><input id="chunk-minutes" class="form-control form-control-sm" type="number" min="1" max="1440" step="1" inputmode="numeric"><em>每片分钟</em></span></span></label>
+                  </fieldset>
+                </section>
+
+              </div>
+
+              <div id="panel-prompt" class="tab-pane fade" role="tabpanel" aria-labelledby="tab-prompt" data-panel="prompt">
+                <div class="mb-4">
+                  <h2 class="mb-1">识别广告提示词</h2>
                   <p class="text-secondary">定义模型如何判断字幕中的商业广告与推广内容。</p>
                 </div>
 
@@ -155,6 +187,34 @@
                 </div>
                 <div id="history-notice" class="alert d-none" role="status"></div>
                 <div id="history-list" class="history-list" aria-live="polite"></div>
+                <nav id="history-pagination" class="history-pagination" aria-label="识别历史分页"></nav>
+              </div>
+
+              <div id="panel-statistics" class="tab-pane fade" role="tabpanel" aria-labelledby="tab-statistics" data-panel="statistics">
+                <div class="mb-4 statistics-heading">
+                  <div>
+                    <h2 class="mb-1">统计分析</h2>
+                    <p class="text-secondary mb-0">按识别日期汇总广告时长、Token 消耗与模型成本。</p>
+                  </div>
+                  <div class="statistics-window" role="group" aria-label="统计时间窗口">
+                    <button id="open-currency-settings" type="button" class="currency-settings-trigger" aria-label="设置成本货币"><i class="ti ti-currency-dollar" aria-hidden="true"></i><span id="statistics-currency-code">USD</span></button>
+                    <i class="statistics-window-divider" aria-hidden="true"></i>
+                    <button type="button" data-statistics-days="3">3 日</button>
+                    <button type="button" data-statistics-days="7" class="is-active">7 日</button>
+                    <button type="button" data-statistics-days="15">15 日</button>
+                    <button type="button" data-statistics-days="30">30 日</button>
+                  </div>
+                </div>
+                <div id="statistics-notice" class="alert d-none" role="status"></div>
+                <div class="statistics-grid">
+                  <article class="statistics-chart-card"><div><h3>识别到的广告时长</h3><span id="statistics-duration-total"></span></div><div id="statistics-duration-chart" class="statistics-chart" aria-label="每日识别到的广告时长图表"></div></article>
+                  <article class="statistics-chart-card"><div><h3>Token 数</h3><span id="statistics-token-total"></span></div><div id="statistics-token-chart" class="statistics-chart" aria-label="每日 Token 数图表"></div></article>
+                  <article class="statistics-chart-card"><div><h3>成本</h3><span id="statistics-cost-total"></span></div><div id="statistics-cost-chart" class="statistics-chart" aria-label="每日成本图表"></div></article>
+                </div>
+                <article id="statistics-breakdown" class="statistics-breakdown" hidden aria-live="polite">
+                  <header><div><h3 id="statistics-breakdown-title"></h3><p id="statistics-breakdown-summary"></p></div><button id="close-statistics-breakdown" type="button" class="btn-close" aria-label="关闭组成结构"></button></header>
+                  <div id="statistics-breakdown-chart" class="statistics-breakdown-chart" aria-label="当日指标组成饼图"></div>
+                </article>
               </div>
             </div>
           </div>
@@ -248,7 +308,30 @@
     </div>
   </div>
 
+  <div id="currency-settings-modal" class="modal modal-blur fade" tabindex="-1" role="dialog" aria-labelledby="currency-settings-title" aria-hidden="true">
+    <div class="modal-dialog modal-sm modal-dialog-centered" role="document">
+      <div class="modal-content">
+        <div class="modal-header">
+          <div><h2 id="currency-settings-title" class="modal-title">成本货币</h2><p class="text-secondary small mb-0 mt-1">历史成本以 USD 保存，图表按最新缓存汇率换算。汇率由 <a href="https://frankfurter.dev/" target="_blank" rel="noopener noreferrer">Frankfurter</a> 提供。</p></div>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+        </div>
+        <div class="modal-body">
+          <label for="currency-select" class="form-label">当地货币单位</label>
+          <select id="currency-select" class="form-select"></select>
+          <div id="currency-rate-meta" class="currency-rate-meta mt-3" aria-live="polite"></div>
+          <div id="currency-settings-notice" class="alert d-none mt-3 mb-0" role="status"></div>
+        </div>
+        <div class="modal-footer">
+          <button id="refresh-exchange-rate" type="button" class="btn btn-outline-secondary me-auto"><i class="ti ti-refresh me-1" aria-hidden="true"></i>刷新汇率</button>
+          <button type="button" class="btn" data-bs-dismiss="modal">取消</button>
+          <button id="save-currency-settings" type="button" class="btn btn-primary">保存</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="vendor/tabler-1.4.0.min.js"></script>
+  <script src="vendor/apexcharts-5.3.6.min.js"></script>
   <script type="module" src="options.js"></script>
 </body>
 </html>

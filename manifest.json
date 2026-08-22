@@ -15,6 +15,7 @@
     "https://www.bilibili.com/*",
     "https://*.hdslb.com/*",
     "https://openrouter.ai/*",
+    "https://api.frankfurter.dev/*",
     "http://127.0.0.1:8765/*"
   ],
   "background": {

@@ -88,6 +88,8 @@ const UPLOADER_PROFILE_CACHE_TTL = 7 * 24 * 60 * 60 * 1000;
 const UPLOADER_PROFILE_FAILURE_RETRY_DELAY = 15 * 60 * 1000;
 const UPLOADER_PROFILE_REQUEST_TIMEOUT = 10000;
 const OPENROUTER_CATALOG_URL = "https://openrouter.ai/api/frontend/v1/catalog/models";
+const EXCHANGE_RATE_CACHE_KEY = "exchangeRateCache";
+const EXCHANGE_RATE_TTL = 7 * 24 * 60 * 60 * 1000;
 const OPENROUTER_CATALOG_CACHE_KEY = "openRouterModelCatalogCache";
 const OPENROUTER_CATALOG_CACHE_VERSION = 2;
 const OPENROUTER_CATALOG_CACHE_TTL = 6 * 60 * 60 * 1000;
@@ -177,6 +179,40 @@ async function getOpenRouterModels(forceRefresh = false) {
       return { status: "completed", models: cache.models, fetchedAt: cache.fetchedAt, stale: true, error: error.message };
     }
     return { status: "failed", models: [], fetchedAt: null, stale: false, error: error.message || "无法获取模型目录。" };
+  }
+}
+
+async function getExchangeRate(currency, forceRefresh = false) {
+  const quote = /^[A-Z]{3}$/.test(String(currency || "").toUpperCase()) ? String(currency).toUpperCase() : "USD";
+  if (quote === "USD") return { status: "completed", base: "USD", quote, rate: 1, date: new Date().toISOString().slice(0, 10), fetchedAt: Date.now(), cached: true };
+  const stored = await chrome.storage.local.get(EXCHANGE_RATE_CACHE_KEY);
+  const cache = stored[EXCHANGE_RATE_CACHE_KEY] && typeof stored[EXCHANGE_RATE_CACHE_KEY] === "object" ? stored[EXCHANGE_RATE_CACHE_KEY] : {};
+  const cached = cache[quote];
+  if (!forceRefresh && Number.isFinite(cached?.rate) && Date.now() - cached.fetchedAt < EXCHANGE_RATE_TTL) return { status: "completed", base: "USD", quote, ...cached, cached: true };
+  try {
+    const response = await fetch(`https://api.frankfurter.dev/v2/rate/USD/${encodeURIComponent(quote)}`);
+    if (!response.ok) throw new Error(`汇率接口返回 ${response.status}`);
+    const payload = await response.json();
+    const rate = Number(payload?.rate);
+    if (!Number.isFinite(rate) || rate <= 0) throw new Error("汇率接口未返回有效汇率");
+    const entry = { rate, date: payload.date || "", fetchedAt: Date.now() };
+    await chrome.storage.local.set({ [EXCHANGE_RATE_CACHE_KEY]: { ...cache, [quote]: entry } });
+    return { status: "completed", base: "USD", quote, ...entry, cached: false };
+  } catch (error) {
+    if (Number.isFinite(cached?.rate)) return { status: "completed", base: "USD", quote, ...cached, cached: true, stale: true, warning: error.message || "汇率刷新失败" };
+    return { status: "failed", error: error.message || "无法获取汇率。" };
+  }
+}
+
+async function getCurrencies() {
+  try {
+    const response = await fetch("https://api.frankfurter.dev/v1/currencies");
+    if (!response.ok) throw new Error(`货币列表接口返回 ${response.status}`);
+    const payload = await response.json();
+    const currencies = Object.entries(payload || {}).map(([code, name]) => ({ code, name })).filter((item) => /^[A-Z]{3}$/.test(item.code));
+    return { status: "completed", currencies };
+  } catch (error) {
+    return { status: "failed", currencies: [], error: error.message || "无法获取货币列表。" };
   }
 }
 
@@ -600,6 +636,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     getOpenRouterModels(Boolean(message.forceRefresh)).then(sendResponse).catch((error) => sendResponse({
       status: "failed", models: [], error: error.message || "无法获取模型目录。"
     }));
+    return true;
+  }
+  if (message.type === "GET_EXCHANGE_RATE") {
+    getExchangeRate(message.currency, Boolean(message.forceRefresh)).then(sendResponse).catch((error) => sendResponse({ status: "failed", error: error.message || "无法获取汇率。" }));
+    return true;
+  }
+  if (message.type === "GET_CURRENCIES") {
+    getCurrencies().then(sendResponse).catch((error) => sendResponse({ status: "failed", currencies: [], error: error.message || "无法获取货币列表。" }));
     return true;
   }
   if (message.type === "ANALYZE") {

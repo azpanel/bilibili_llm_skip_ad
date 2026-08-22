@@ -1,5 +1,7 @@
 import { filterModels, formatModelPrices } from "./lib/model-catalog.js";
 import { diffLines } from "./lib/text-diff.js";
+import { DEFAULT_RECOGNITION_RULES, normalizeRecognitionRules } from "./lib/recognition-rules.js";
+import { aggregateDailyStatistics, dailyMetricBreakdown } from "./lib/statistics.js";
 
 const DEFAULT_PROMPT = `你是视频跳过片段识别助手。你的唯一任务是：根据视频标题、简介和带时间戳字幕，找出“与视频主线无关、观众跳过后不影响理解视频主要内容”的商业植入/赞助推广片段。
 
@@ -81,12 +83,27 @@ const form = document.querySelector("#settings");
 const keyInput = document.querySelector("#api-key");
 const modelInput = document.querySelector("#model");
 const promptInput = document.querySelector("#prompt");
+const durationThresholdInput = document.querySelector("#duration-threshold");
+const headTailMinutesInput = document.querySelector("#head-tail-minutes");
+const chunkMinutesInput = document.querySelector("#chunk-minutes");
+const longVideoModeInputs = [...document.querySelectorAll('[name="longVideoMode"]')];
+const rulePreview = document.querySelector("#duration-rule-preview");
 const promptDiffElement = document.querySelector("#prompt-diff");
 const promptDiffSummary = document.querySelector("#prompt-diff-summary");
 const promptDiffModalElement = document.querySelector("#prompt-diff-modal");
 const historyList = document.querySelector("#history-list");
 const historyNotice = document.querySelector("#history-notice");
+const historyPagination = document.querySelector("#history-pagination");
+const statisticsNotice = document.querySelector("#statistics-notice");
+const statisticsWindowButtons = [...document.querySelectorAll("[data-statistics-days]")];
+const statisticsBreakdown = document.querySelector("#statistics-breakdown");
 const deleteHistoryModalElement = document.querySelector("#delete-history-modal");
+const currencySettingsModalElement = document.querySelector("#currency-settings-modal");
+const currencySelect = document.querySelector("#currency-select");
+const currencyRateMeta = document.querySelector("#currency-rate-meta");
+const currencySettingsNotice = document.querySelector("#currency-settings-notice");
+const refreshExchangeRateButton = document.querySelector("#refresh-exchange-rate");
+const saveCurrencySettingsButton = document.querySelector("#save-currency-settings");
 const confirmDeleteHistoryButton = document.querySelector("#confirm-delete-history");
 const hideOverlayInFullscreenInput = document.querySelector("#hide-overlay-in-fullscreen");
 const skipMidInput = document.querySelector("#skip-mid-input");
@@ -117,10 +134,21 @@ let visibleMarketModels = MODEL_MARKET_PAGE_SIZE;
 let marketLoading = false;
 let historyRecords = [];
 let historyLoaded = false;
+let historyPage = 1;
+const HISTORY_PAGE_SIZE = 10;
+let historyPageTransitioning = false;
 let pendingHistoryDelete = null;
+let statisticsDays = 7;
+const statisticsCharts = new Map();
+let statisticsRows = [];
+let statisticsBreakdownChart = null;
+let displayCurrency = "USD";
+let exchangeRate = { quote: "USD", rate: 1, fetchedAt: Date.now(), cached: true };
+let currenciesLoaded = false;
 const modelMarket = tabler.Modal.getOrCreateInstance(modelMarketElement);
 const promptDiffModal = tabler.Modal.getOrCreateInstance(promptDiffModalElement);
 const deleteHistoryModal = tabler.Modal.getOrCreateInstance(deleteHistoryModalElement);
+const currencySettingsModal = tabler.Modal.getOrCreateInstance(currencySettingsModalElement);
 
 function formatHistoryTime(seconds) {
   const total = Math.max(0, Math.floor(Number(seconds) || 0));
@@ -141,8 +169,171 @@ function formatCost(value) {
   return `$${value.toFixed(value < 0.01 ? 6 : 4)}`;
 }
 
+function formatDisplayCost(value, currency = displayCurrency) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "未知";
+  try {
+    return new Intl.NumberFormat("zh-CN", { style: "currency", currency, minimumFractionDigits: number && Math.abs(number) < 0.01 ? 4 : 2, maximumFractionDigits: number && Math.abs(number) < 0.01 ? 6 : 4 }).format(number);
+  } catch {
+    return `${currency} ${number.toFixed(4)}`;
+  }
+}
+
+function setCurrencyNotice(message = "", type = "info") {
+  if (!message) {
+    currencySettingsNotice.className = "alert d-none mt-3 mb-0";
+    return;
+  }
+  currencySettingsNotice.textContent = message;
+  currencySettingsNotice.className = `alert alert-${type === "error" ? "danger" : type} mt-3 mb-0`;
+}
+
+function renderCurrencyRateMeta(rate = exchangeRate) {
+  if (!rate || !Number.isFinite(Number(rate.rate))) {
+    currencyRateMeta.textContent = "尚未获取汇率。";
+    return;
+  }
+  const time = rate.fetchedAt ? new Date(rate.fetchedAt).toLocaleString("zh-CN") : "未知时间";
+  const value = document.createElement("b");
+  value.textContent = `1 USD = ${Number(rate.rate).toLocaleString("zh-CN", { maximumFractionDigits: 6 })} ${rate.quote}`;
+  const meta = document.createElement("small");
+  meta.textContent = `数据日期：${rate.date || "基准货币"} · 获取于 ${time}${rate.stale ? " · 当前为过期缓存" : ""}`;
+  currencyRateMeta.replaceChildren(value, meta);
+}
+
+async function ensureExchangeRate(currency = displayCurrency, forceRefresh = false) {
+  const result = await chrome.runtime.sendMessage({ type: "GET_EXCHANGE_RATE", currency, forceRefresh });
+  if (result?.status !== "completed") throw new Error(result?.error || "无法获取汇率。");
+  exchangeRate = result;
+  renderCurrencyRateMeta(result);
+  if (result.warning) setCurrencyNotice(`${result.warning}，已继续使用缓存汇率。`, "warning");
+  return result;
+}
+
+async function loadCurrencies() {
+  if (currenciesLoaded) return;
+  const fallback = { USD: "US Dollar", CNY: "Chinese Yuan", EUR: "Euro", JPY: "Japanese Yen", GBP: "British Pound", HKD: "Hong Kong Dollar", TWD: "New Taiwan Dollar", KRW: "South Korean Won", CAD: "Canadian Dollar", AUD: "Australian Dollar", SGD: "Singapore Dollar" };
+  const result = await chrome.runtime.sendMessage({ type: "GET_CURRENCIES" });
+  const values = result?.status === "completed" && result.currencies?.length ? result.currencies : Object.entries(fallback).map(([code, name]) => ({ code, name }));
+  currencySelect.replaceChildren(...values.sort((left, right) => left.code.localeCompare(right.code)).map(({ code, name }) => {
+    const option = document.createElement("option");
+    option.value = code;
+    option.textContent = `${code} — ${name}`;
+    return option;
+  }));
+  if (![...currencySelect.options].some((option) => option.value === displayCurrency)) {
+    const option = new Option(displayCurrency, displayCurrency);
+    currencySelect.prepend(option);
+  }
+  currencySelect.value = displayCurrency;
+  currenciesLoaded = true;
+  if (result?.status !== "completed") setCurrencyNotice("货币列表暂时不可用，已显示常用货币。", "warning");
+}
+
+function formatDurationValue(seconds) {
+  const value = Math.max(0, Math.round(Number(seconds) || 0));
+  if (value < 60) return `${value} 秒`;
+  const minutes = Math.floor(value / 60);
+  const rest = value % 60;
+  return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分钟`;
+}
+
+function chartOptions(metric, name, data, categories, color, formatter) {
+  const allowMotion = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  return {
+    chart: { type: "area", height: 250, fontFamily: "inherit", foreColor: "#667382", toolbar: { show: false }, zoom: { enabled: false }, animations: { enabled: allowMotion, easing: "easeinout", speed: 520, animateGradually: { enabled: allowMotion, delay: 45 }, dynamicAnimation: { enabled: allowMotion, speed: 420 } }, events: { dataPointSelection: (_event, _context, config) => { const row = statisticsRows[config.dataPointIndex]; if (row) showStatisticsBreakdown(metric, row); } } },
+    series: [{ name, data }],
+    colors: [color],
+    dataLabels: { enabled: false },
+    stroke: { curve: "smooth", width: 3 },
+    markers: { size: 4, strokeWidth: 0, hover: { size: 7 } },
+    fill: { type: "gradient", gradient: { shadeIntensity: .2, opacityFrom: .36, opacityTo: .04, stops: [0, 88, 100] } },
+    grid: { borderColor: "#e7edf4", strokeDashArray: 4, padding: { left: 8, right: 12 } },
+    xaxis: { categories, axisBorder: { show: false }, axisTicks: { show: false }, labels: { rotate: 0, hideOverlappingLabels: true, trim: false } },
+    yaxis: { min: 0, forceNiceScale: true, labels: { formatter } },
+    tooltip: { theme: "light", shared: false, intersect: true, y: { formatter } },
+    legend: { show: false }
+  };
+}
+
+function breakdownFormatter(metric, value) {
+  if (metric === "duration") return formatDurationValue(value);
+  if (metric === "tokens") return `${new Intl.NumberFormat("zh-CN").format(Math.round(value))} tokens`;
+  return formatDisplayCost(value);
+}
+
+function hideStatisticsBreakdown() {
+  statisticsBreakdown.hidden = true;
+  statisticsBreakdownChart?.destroy();
+  statisticsBreakdownChart = null;
+  document.querySelector("#statistics-breakdown-chart").replaceChildren();
+}
+
+function showStatisticsBreakdown(metric, row) {
+  const rate = exchangeRate.quote === displayCurrency ? Number(exchangeRate.rate) || 1 : 1;
+  const source = dailyMetricBreakdown(historyRecords, row.key, metric, rate);
+  const metricName = metric === "duration" ? "广告时长" : metric === "tokens" ? "Token 数" : `成本（${displayCurrency}）`;
+  const values = source;
+  hideStatisticsBreakdown();
+  statisticsBreakdown.hidden = false;
+  document.querySelector("#statistics-breakdown-title").textContent = `${row.label} · ${metricName}组成`;
+  const total = source.reduce((sum, item) => sum + item.value, 0);
+  document.querySelector("#statistics-breakdown-summary").textContent = source.length ? `${source.length} 个视频，合计 ${breakdownFormatter(metric, total)}` : "当日没有可展示的组成数据。";
+  if (!values.length) return;
+  const allowMotion = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  statisticsBreakdownChart = new window.ApexCharts(document.querySelector("#statistics-breakdown-chart"), {
+    chart: { type: "pie", height: 330, fontFamily: "inherit", animations: { enabled: allowMotion, easing: "easeinout", speed: 480 } },
+    series: values.map((item) => item.value),
+    labels: values.map((item) => item.label),
+    legend: { position: "right", fontSize: "12px" },
+    dataLabels: { enabled: true, formatter: (percentage) => percentage >= 4 ? `${percentage.toFixed(1)}%` : "" },
+    stroke: { colors: ["#fff"], width: 2 },
+    tooltip: { y: { formatter: (value) => breakdownFormatter(metric, value) } },
+    responsive: [{ breakpoint: 700, options: { chart: { height: 390 }, legend: { position: "bottom" } } }]
+  });
+  statisticsBreakdownChart.render();
+  statisticsBreakdown.scrollIntoView({ behavior: allowMotion ? "smooth" : "auto", block: "nearest" });
+}
+
+function upsertStatisticsChart(key, selector, options) {
+  const existing = statisticsCharts.get(key);
+  if (existing) {
+    existing.updateOptions({ xaxis: options.xaxis }, false, true);
+    existing.updateSeries(options.series, true);
+    return;
+  }
+  const chart = new window.ApexCharts(document.querySelector(selector), options);
+  statisticsCharts.set(key, chart);
+  chart.render();
+}
+
+function renderStatistics() {
+  if (!window.ApexCharts) {
+    statisticsNotice.textContent = "ApexCharts 加载失败，无法绘制统计图表。";
+    statisticsNotice.className = "alert alert-danger";
+    return;
+  }
+  statisticsNotice.classList.add("d-none");
+  hideStatisticsBreakdown();
+  const rows = aggregateDailyStatistics(historyRecords, statisticsDays);
+  statisticsRows = rows;
+  const categories = rows.map((row) => row.label);
+  const adSeconds = rows.map((row) => row.adSeconds);
+  const tokens = rows.map((row) => row.tokens);
+  const rate = exchangeRate.quote === displayCurrency ? Number(exchangeRate.rate) || 1 : 1;
+  const costs = rows.map((row) => row.cost * rate);
+  const number = new Intl.NumberFormat("zh-CN");
+  document.querySelector("#statistics-duration-total").textContent = `${statisticsDays} 日累计 ${formatDurationValue(adSeconds.reduce((sum, value) => sum + value, 0))}`;
+  document.querySelector("#statistics-token-total").textContent = `${statisticsDays} 日累计 ${number.format(tokens.reduce((sum, value) => sum + value, 0))}`;
+  document.querySelector("#statistics-cost-total").textContent = `${statisticsDays} 日累计 ${formatDisplayCost(costs.reduce((sum, value) => sum + value, 0))}`;
+  upsertStatisticsChart("duration", "#statistics-duration-chart", chartOptions("duration", "广告时长", adSeconds, categories, "#f59f00", formatDurationValue));
+  upsertStatisticsChart("tokens", "#statistics-token-chart", chartOptions("tokens", "Token 数", tokens, categories, "#206bc4", (value) => number.format(Math.round(value))));
+  upsertStatisticsChart("cost", "#statistics-cost-chart", chartOptions("cost", `成本（${displayCurrency}）`, costs, categories, "#2fb344", (value) => formatDisplayCost(Number(value))));
+}
+
 function renderHistory() {
   historyList.replaceChildren();
+  historyPagination.replaceChildren();
   if (!historyRecords.length) {
     const empty = document.createElement("div");
     empty.className = "history-empty";
@@ -151,9 +342,14 @@ function renderHistory() {
     return;
   }
 
-  for (const record of historyRecords) {
+  const pageCount = Math.max(1, Math.ceil(historyRecords.length / HISTORY_PAGE_SIZE));
+  historyPage = Math.min(Math.max(1, historyPage), pageCount);
+  const pageRecords = historyRecords.slice((historyPage - 1) * HISTORY_PAGE_SIZE, historyPage * HISTORY_PAGE_SIZE);
+  let recordIndex = 0;
+  for (const record of pageRecords) {
     const card = document.createElement("article");
-    card.className = "history-card";
+    card.className = "history-card history-page-enter";
+    card.style.setProperty("--history-enter-delay", `${Math.min(recordIndex, 8) * 35}ms`);
     const main = document.createElement("div");
     main.className = "history-main";
     const title = document.createElement("h3");
@@ -180,7 +376,26 @@ function renderHistory() {
     videoLink.target = "_blank";
     videoLink.rel = "noopener noreferrer";
     videoLink.textContent = record.bvid || `av${record.aid}`;
-    main.append(title, uploader, videoLink);
+    const recognizedAt = document.createElement("time");
+    recognizedAt.className = "history-recognized-at";
+    const recognizedDate = new Date(record.recognizedAt);
+    recognizedAt.dateTime = Number.isNaN(recognizedDate.getTime()) ? "" : recognizedDate.toISOString();
+    recognizedAt.innerHTML = '<i class="ti ti-clock" aria-hidden="true"></i>';
+    recognizedAt.append(` ${Number.isNaN(recognizedDate.getTime()) ? "识别时间未知" : recognizedDate.toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })}`);
+    const recordMeta = document.createElement("div");
+    recordMeta.className = "history-record-meta";
+    const model = document.createElement("span");
+    model.innerHTML = '<i class="ti ti-robot" aria-hidden="true"></i>';
+    model.append(` ${record.model || "模型未知"}`);
+    model.title = record.model || "旧记录未保存模型信息";
+    const subtitleSource = document.createElement("span");
+    subtitleSource.innerHTML = '<i class="ti ti-subtitles" aria-hidden="true"></i>';
+    subtitleSource.append(` ${record.subtitleSource === "bilibili" ? "B 站字幕" : record.subtitleSource === "local" ? "本机识别" : "字幕来源未知"}`);
+    recordMeta.append(model, subtitleSource);
+    const detailsRow = document.createElement("div");
+    detailsRow.className = "history-details-row";
+    detailsRow.append(recognizedAt, recordMeta);
+    main.append(title, uploader, videoLink, detailsRow);
 
     const segments = document.createElement("div");
     segments.className = "history-segments";
@@ -218,7 +433,47 @@ function renderHistory() {
     });
     card.append(main, segments, usage, remove);
     historyList.append(card);
+    recordIndex += 1;
   }
+  renderHistoryPagination(pageCount);
+}
+
+function renderHistoryPagination(pageCount) {
+  if (pageCount <= 1) return;
+  const addButton = (label, page, options = {}) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `history-page-button${options.active ? " is-active" : ""}`;
+    button.textContent = label;
+    button.disabled = Boolean(options.disabled);
+    if (options.active) button.setAttribute("aria-current", "page");
+    button.addEventListener("click", () => switchHistoryPage(page));
+    historyPagination.append(button);
+  };
+  addButton("上一页", historyPage - 1, { disabled: historyPage === 1 });
+  const start = Math.max(1, Math.min(historyPage - 2, pageCount - 4));
+  const end = Math.min(pageCount, start + 4);
+  for (let page = start; page <= end; page += 1) addButton(String(page), page, { active: page === historyPage });
+  addButton("下一页", historyPage + 1, { disabled: historyPage === pageCount });
+}
+
+function switchHistoryPage(page) {
+  if (historyPageTransitioning || page === historyPage) return;
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const commit = () => {
+    historyPage = page;
+    renderHistory();
+    historyList.classList.remove("history-page-leave");
+    historyPageTransitioning = false;
+    document.querySelector("#panel-history")?.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "start" });
+  };
+  if (reducedMotion) {
+    commit();
+    return;
+  }
+  historyPageTransitioning = true;
+  historyList.classList.add("history-page-leave");
+  window.setTimeout(commit, 150);
 }
 
 async function loadHistory(force = false) {
@@ -233,6 +488,7 @@ async function loadHistory(force = false) {
     return;
   }
   historyRecords = Array.isArray(result.records) ? result.records : [];
+  historyPage = 1;
   historyLoaded = true;
   renderHistory();
 }
@@ -749,13 +1005,38 @@ function clearFieldError(input) {
   input.removeAttribute("aria-invalid");
 }
 
+function selectedLongVideoMode() {
+  return longVideoModeInputs.find((input) => input.checked)?.value || DEFAULT_RECOGNITION_RULES.longVideoMode;
+}
+
+function renderDurationRule() {
+  const mode = selectedLongVideoMode();
+  document.querySelectorAll(".long-video-option").forEach((option) => option.classList.toggle("is-selected", option.dataset.mode === mode));
+  document.querySelectorAll(".long-video-parameter").forEach((parameter) => { parameter.hidden = parameter.dataset.mode !== mode; });
+  const threshold = durationThresholdInput.value || DEFAULT_RECOGNITION_RULES.durationThresholdMinutes;
+  const description = mode === "full" ? "超过阈值后仍发送全部字幕" : mode === "headTail"
+    ? `超过阈值后检查首尾各 ${headTailMinutesInput.value || DEFAULT_RECOGNITION_RULES.headTailMinutes} 分钟`
+    : `超过阈值后每 ${chunkMinutesInput.value || DEFAULT_RECOGNITION_RULES.chunkMinutes} 分钟逐片检查`;
+  rulePreview.querySelector("strong").textContent = `≤ ${threshold} 分钟：完整检查`;
+  rulePreview.querySelector("span").textContent = description;
+  rulePreview.dataset.mode = mode;
+}
+
+function validateMinuteInput(input, label) {
+  const value = Number(input.value);
+  if (Number.isInteger(value) && value >= 1 && value <= 1440) return value;
+  showFieldError(input, "rules", `${label}必须是 1–1440 的整数分钟。`);
+  return null;
+}
+
 function updateKeyHint(apiKey) {
   hint.textContent = apiKey ? `已保存密钥（末四位：${apiKey.slice(-4)}）。如不修改可留空。` : "尚未保存 API Key。";
 }
 
 document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach((el) => tabler.Tooltip.getOrCreateInstance(el));
 
-[modelInput, promptInput].forEach((input) => input.addEventListener("input", () => clearFieldError(input)));
+[modelInput, promptInput, durationThresholdInput, headTailMinutesInput, chunkMinutesInput].forEach((input) => input.addEventListener("input", () => { clearFieldError(input); renderDurationRule(); }));
+longVideoModeInputs.forEach((input) => input.addEventListener("change", renderDurationRule));
 skipMidInput.addEventListener("input", () => setSkipMidError());
 document.querySelector("#add-skip-mid").addEventListener("click", addSkippedUploaderMid);
 skipMidInput.addEventListener("keydown", (event) => {
@@ -786,6 +1067,72 @@ loadMoreModelsButton.addEventListener("click", () => {
   renderModelMarketResults();
 });
 document.querySelector("#tab-history").addEventListener("shown.bs.tab", () => loadHistory());
+document.querySelector("#tab-statistics").addEventListener("shown.bs.tab", async () => {
+  await loadHistory(true);
+  if (!historyLoaded) {
+    statisticsNotice.textContent = "无法读取识别历史。";
+    statisticsNotice.className = "alert alert-danger";
+    return;
+  }
+  try {
+    await ensureExchangeRate(displayCurrency);
+  } catch (error) {
+    statisticsNotice.textContent = error.message || "无法获取汇率。";
+    statisticsNotice.className = "alert alert-danger";
+    return;
+  }
+  requestAnimationFrame(renderStatistics);
+});
+statisticsWindowButtons.forEach((button) => button.addEventListener("click", () => {
+  statisticsDays = Number(button.dataset.statisticsDays);
+  statisticsWindowButtons.forEach((item) => item.classList.toggle("is-active", item === button));
+  renderStatistics();
+}));
+document.querySelector("#close-statistics-breakdown").addEventListener("click", hideStatisticsBreakdown);
+document.querySelector("#open-currency-settings").addEventListener("click", async () => {
+  setCurrencyNotice();
+  currencySettingsModal.show();
+  await loadCurrencies();
+  currencySelect.value = displayCurrency;
+  try {
+    await ensureExchangeRate(displayCurrency);
+  } catch (error) {
+    setCurrencyNotice(error.message || "无法获取汇率。", "error");
+  }
+});
+refreshExchangeRateButton.addEventListener("click", async () => {
+  refreshExchangeRateButton.disabled = true;
+  refreshExchangeRateButton.classList.add("btn-loading");
+  setCurrencyNotice("正在刷新汇率…");
+  try {
+    await ensureExchangeRate(currencySelect.value, true);
+    if (!exchangeRate.warning) setCurrencyNotice("汇率已刷新。", "success");
+  } catch (error) {
+    setCurrencyNotice(error.message || "汇率刷新失败。", "error");
+  } finally {
+    refreshExchangeRateButton.disabled = false;
+    refreshExchangeRateButton.classList.remove("btn-loading");
+  }
+});
+saveCurrencySettingsButton.addEventListener("click", async () => {
+  const currency = currencySelect.value;
+  saveCurrencySettingsButton.disabled = true;
+  saveCurrencySettingsButton.classList.add("btn-loading");
+  setCurrencyNotice("正在保存货币设置…");
+  try {
+    await ensureExchangeRate(currency);
+    await chrome.storage.sync.set({ displayCurrency: currency });
+    displayCurrency = currency;
+    document.querySelector("#statistics-currency-code").textContent = currency;
+    renderStatistics();
+    currencySettingsModal.hide();
+  } catch (error) {
+    setCurrencyNotice(error.message || "无法保存货币设置。", "error");
+  } finally {
+    saveCurrencySettingsButton.disabled = false;
+    saveCurrencySettingsButton.classList.remove("btn-loading");
+  }
+});
 document.querySelector("#refresh-history").addEventListener("click", () => loadHistory(true));
 confirmDeleteHistoryButton.addEventListener("click", async () => {
   if (!pendingHistoryDelete) return;
@@ -799,6 +1146,7 @@ confirmDeleteHistoryButton.addEventListener("click", async () => {
     pendingHistoryDelete = null;
     deleteHistoryModal.hide();
     renderHistory();
+    if (statisticsCharts.size) renderStatistics();
   } catch (error) {
     setStatus(error.message || "删除识别记录失败。", "error");
   } finally {
@@ -811,7 +1159,7 @@ deleteHistoryModalElement.addEventListener("hidden.bs.modal", () => { pendingHis
 try {
   const [local, sync] = await Promise.all([
     chrome.storage.local.get(["openRouterApiKey", MODEL_CANDIDATES_KEY]),
-    chrome.storage.sync.get(["model", "prompt", SKIPPED_UPLOADER_MIDS_KEY, HIDE_OVERLAY_IN_FULLSCREEN_KEY])
+    chrome.storage.sync.get(["model", "prompt", SKIPPED_UPLOADER_MIDS_KEY, HIDE_OVERLAY_IN_FULLSCREEN_KEY, "durationThresholdMinutes", "longVideoMode", "headTailMinutes", "chunkMinutes", "displayCurrency"])
   ]);
   modelInput.value = sync.model || "deepseek/deepseek-chat";
   const hasStoredCandidates = Object.prototype.hasOwnProperty.call(local, MODEL_CANDIDATES_KEY);
@@ -819,6 +1167,15 @@ try {
   renderModelCandidates();
   if (!hasStoredCandidates) chrome.storage.local.set({ [MODEL_CANDIDATES_KEY]: modelCandidates }).catch(() => {});
   promptInput.value = sync.prompt || DEFAULT_PROMPT;
+  const recognitionRules = normalizeRecognitionRules(sync);
+  durationThresholdInput.value = recognitionRules.durationThresholdMinutes;
+  headTailMinutesInput.value = recognitionRules.headTailMinutes;
+  chunkMinutesInput.value = recognitionRules.chunkMinutes;
+  const modeInput = longVideoModeInputs.find((input) => input.value === recognitionRules.longVideoMode);
+  if (modeInput) modeInput.checked = true;
+  renderDurationRule();
+  displayCurrency = /^[A-Z]{3}$/.test(sync.displayCurrency || "") ? sync.displayCurrency : "USD";
+  document.querySelector("#statistics-currency-code").textContent = displayCurrency;
   hideOverlayInFullscreenInput.checked = sync[HIDE_OVERLAY_IN_FULLSCREEN_KEY] === true;
   skippedUploaderMids = normalizeSkippedUploaderMids(sync[SKIPPED_UPLOADER_MIDS_KEY]);
   renderSkippedUploaderMids();
@@ -829,6 +1186,11 @@ try {
   modelCandidates = [modelInput.value];
   renderModelCandidates();
   promptInput.value = DEFAULT_PROMPT;
+  durationThresholdInput.value = DEFAULT_RECOGNITION_RULES.durationThresholdMinutes;
+  headTailMinutesInput.value = DEFAULT_RECOGNITION_RULES.headTailMinutes;
+  chunkMinutesInput.value = DEFAULT_RECOGNITION_RULES.chunkMinutes;
+  longVideoModeInputs.find((input) => input.value === DEFAULT_RECOGNITION_RULES.longVideoMode).checked = true;
+  renderDurationRule();
   renderSkippedUploaderMids();
   updateKeyHint();
   setStatus(`无法读取已保存的设置：${getStorageErrorMessage(error)}`, "error");
@@ -844,9 +1206,13 @@ form.addEventListener("submit", async (event) => {
     return;
   }
   if (!prompt) {
-    showFieldError(promptInput, "rules", "请填写识别广告提示词。");
+    showFieldError(promptInput, "prompt", "请填写识别广告提示词。");
     return;
   }
+  const durationThresholdMinutes = validateMinuteInput(durationThresholdInput, "完整检查阈值");
+  const headTailMinutes = validateMinuteInput(headTailMinutesInput, "首尾检查时长");
+  const chunkMinutes = validateMinuteInput(chunkMinutesInput, "切片时长");
+  if (durationThresholdMinutes == null || headTailMinutes == null || chunkMinutes == null) return;
   setSaveState(true);
   setStatus("正在保存设置…");
   try {
@@ -854,7 +1220,11 @@ form.addEventListener("submit", async (event) => {
       model,
       prompt,
       [SKIPPED_UPLOADER_MIDS_KEY]: skippedUploaderMids,
-      [HIDE_OVERLAY_IN_FULLSCREEN_KEY]: hideOverlayInFullscreenInput.checked
+      [HIDE_OVERLAY_IN_FULLSCREEN_KEY]: hideOverlayInFullscreenInput.checked,
+      durationThresholdMinutes,
+      longVideoMode: selectedLongVideoMode(),
+      headTailMinutes,
+      chunkMinutes
     })];
     if (apiKey) writes.push(chrome.storage.local.set({ openRouterApiKey: apiKey }));
     await Promise.all(writes);
