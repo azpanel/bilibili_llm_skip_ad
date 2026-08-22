@@ -5,6 +5,48 @@ import { extractJson, normalizeSegments, parseSegmentTimestamp } from "../lib/se
 import { filterModels, formatModelPrices, normalizeOpenRouterCatalog } from "../lib/model-catalog.js";
 import { diffLines } from "../lib/text-diff.js";
 import { normalizeHistoryRecord, upsertHistory } from "../lib/history.js";
+import { normalizeRecognitionRules, planRecognitionRanges, recognitionRuleFingerprint, subtitleItemsForRanges } from "../lib/recognition-rules.js";
+import { aggregateDailyStatistics, dailyMetricBreakdown } from "../lib/statistics.js";
+
+test("统计按本地日期聚合广告时长、token 和成本并补零", () => {
+  const now = new Date(2026, 7, 23, 18).getTime();
+  const rows = aggregateDailyStatistics([
+    { recognizedAt: new Date(2026, 7, 23, 9).getTime(), segments: [{ start: 10, end: 40 }, { start: 50, end: 65 }], usage: { totalTokens: 1200, cost: 0.0123 } },
+    { recognizedAt: new Date(2026, 7, 23, 20).getTime(), segments: [{ start: 0, end: 5 }], usage: { totalTokens: 300, cost: 0.001 } }
+  ], 3, now);
+  assert.deepEqual(rows.map((row) => row.label), ["08-21", "08-22", "08-23"]);
+  assert.deepEqual(rows.map((row) => row.adSeconds), [0, 0, 50]);
+  assert.equal(rows[2].tokens, 1500);
+  assert.equal(rows[2].cost, 0.0133);
+});
+
+test("统计数据点可按视频拆分当日指标", () => {
+  const date = new Date(2026, 7, 23, 12).getTime();
+  const records = [
+    { title: "视频 A", recognizedAt: date, segments: [{ start: 0, end: 30 }], usage: { totalTokens: 100, cost: .01 } },
+    { title: "视频 B", recognizedAt: date, segments: [{ start: 0, end: 10 }], usage: { totalTokens: 200, cost: .02 } }
+  ];
+  assert.deepEqual(dailyMetricBreakdown(records, "2026-08-23", "duration"), [{ label: "视频 A", value: 30 }, { label: "视频 B", value: 10 }]);
+  assert.deepEqual(dailyMetricBreakdown(records, "2026-08-23", "cost", 7), [{ label: "视频 B", value: .14 }, { label: "视频 A", value: .07 }]);
+});
+
+test("识别规则使用安全默认值并生成稳定指纹", () => {
+  const rules = normalizeRecognitionRules({ durationThresholdMinutes: 0, longVideoMode: "bad", headTailMinutes: 7, chunkMinutes: 12 });
+  assert.deepEqual(rules, { durationThresholdMinutes: 30, longVideoMode: "chunks", headTailMinutes: 7, chunkMinutes: 12 });
+  assert.equal(recognitionRuleFingerprint(rules), "30:chunks:7:12");
+});
+
+test("按阈值、首尾和逐片模式规划检查范围", () => {
+  assert.deepEqual(planRecognitionRanges(1800, {}), { mode: "full", ranges: [{ start: 0, end: 1800 }] });
+  assert.deepEqual(planRecognitionRanges(3600, { durationThresholdMinutes: 30, longVideoMode: "headTail", headTailMinutes: 5 }), { mode: "headTail", ranges: [{ start: 0, end: 300 }, { start: 3300, end: 3600 }] });
+  assert.deepEqual(planRecognitionRanges(1500, { durationThresholdMinutes: 10, longVideoMode: "headTail", headTailMinutes: 20 }), { mode: "full", ranges: [{ start: 0, end: 1500 }] });
+  assert.deepEqual(planRecognitionRanges(1500, { durationThresholdMinutes: 10, longVideoMode: "chunks", chunkMinutes: 10 }), { mode: "chunks", ranges: [{ start: 0, end: 600 }, { start: 600, end: 1200 }, { start: 1200, end: 1500 }] });
+});
+
+test("字幕范围保留边界上下文和原始时间戳", () => {
+  const items = [{ start: 580, end: 590, text: "前文" }, { start: 600, end: 610, text: "边界" }, { start: 700, end: 710, text: "后文" }];
+  assert.deepEqual(subtitleItemsForRanges(items, [{ start: 600, end: 650 }]), items.slice(0, 2));
+});
 
 test("字幕时间线使用可读的时间戳并忽略无效字幕", () => {
   assert.equal(formatTimestamp(3661), "01:01:01");
@@ -71,6 +113,15 @@ test("识别历史只接受含广告的视频并按视频去重更新", () => {
   assert.deepEqual(upsertHistory([first], updated), [updated]);
   assert.equal(first.id, "bv1demo");
   assert.equal(first.usage.totalTokens, 100);
+});
+
+test("识别历史保存模型与字幕来源并兼容旧记录", () => {
+  const current = normalizeHistoryRecord({ bvid: "BV1source", model: "openai/gpt-demo", subtitleSource: "local", segments: [{ start: 1, end: 2 }] });
+  const legacy = normalizeHistoryRecord({ bvid: "BV1legacy", segments: [{ start: 1, end: 2 }] });
+  assert.equal(current.model, "openai/gpt-demo");
+  assert.equal(current.subtitleSource, "local");
+  assert.equal(legacy.model, "");
+  assert.equal(legacy.subtitleSource, "");
 });
 
 test("OpenRouter 目录只保留可用于文本聊天的公开模型", () => {

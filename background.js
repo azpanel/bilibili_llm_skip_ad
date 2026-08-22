@@ -521,7 +521,7 @@ async function analyze({ bvid, cacheKey = bvid, timeline, duration, force, metad
   const cached = await chrome.storage.session.get(`analysis:${cacheKey}`);
   if (!force && cached[`analysis:${cacheKey}`]) {
     const result = cached[`analysis:${cacheKey}`];
-    if (result.segments?.length) await saveAnalysisHistory(metadata, result.segments, result.usage);
+    if (result.segments?.length) await saveAnalysisHistory({ ...metadata, model: result.model || metadata.model }, result.segments, result.usage);
     return { ...result, cached: true };
   }
 
@@ -552,9 +552,9 @@ async function analyze({ bvid, cacheKey = bvid, timeline, duration, force, metad
     const reasoningDebug = typeof message?.reasoning === "string" ? message.reasoning : "";
     const segments = normalizeSegments(extractJson(content), duration);
     const usage = normalizeUsage(payload?.usage);
-    const result = { status: "completed", segments, usage, requestDebug, responseDebug: responseText, reasoningDebug };
+    const result = { status: "completed", segments, usage, model: sync.model, requestDebug, responseDebug: responseText, reasoningDebug };
     await chrome.storage.session.set({ [`analysis:${cacheKey}`]: result });
-    if (segments.length) await saveAnalysisHistory(metadata, segments, usage);
+    if (segments.length) await saveAnalysisHistory({ ...metadata, model: sync.model }, segments, usage);
     return result;
   } catch (error) {
     return { status: "failed", error: error.message || "AI 分析失败。", requestDebug, responseDebug: responseText };
