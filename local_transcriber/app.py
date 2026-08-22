@@ -152,7 +152,15 @@ async def get_transcription(job_id: str, request: Request):
     job = await manager.get(job_id)
     if not job:
         raise HTTPException(404, "找不到转写任务。")
-    return {"jobId": job.id, "status": job.status, "progress": job.progress, "message": job.message, "transcription": manager.transcription_details(job), "duration": job.result.get("duration") if job.result else None, "language": job.result.get("language") if job.result else None, "segments": job.result.get("segments") if job.result else None, "error": job.error}
+    return {"jobId": job.id, "status": job.status, "progress": job.progress, "message": job.message, "transcription": manager.transcription_details(job), "duration": job.result.get("duration") if job.result else None, "language": job.result.get("language") if job.result else None, "segments": job.result.get("segments") if job.result else None, "completedRanges": job.completed_ranges, "currentRange": job.current_range, "error": job.error}
+
+
+@app.post("/v1/transcriptions/{job_id}/continue", status_code=202)
+async def continue_transcription(job_id: str, request: Request):
+    authorize(request)
+    if not await manager.continue_job(job_id):
+        raise HTTPException(409, "任务当前不在等待继续状态。")
+    return {"jobId": job_id, "status": "continuing"}
 
 
 @app.delete("/v1/transcriptions/{job_id}", status_code=204)

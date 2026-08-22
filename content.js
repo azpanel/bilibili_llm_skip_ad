@@ -32,11 +32,18 @@
   let panelLayoutReady = false;
 
   chrome.runtime.onMessage.addListener((message) => {
+    if (message.type === "ANALYSIS_RANGE_PROGRESS") {
+      const modeLabel = message.mode === "headTail" ? "首尾范围" : `第 ${message.index}/${message.total} 片`;
+      state = { ...state, analysis: `正在检查${modeLabel}`, progress: Math.max(70, Math.min(89, 69 + Math.round(message.index / message.total * 20))), progressLabel: `正在检查${modeLabel}`, progressState: "active" };
+      render();
+      return;
+    }
     const activeRun = activeLocalTranscription;
     if (message.type !== "LOCAL_TRANSCRIPTION_PROGRESS" || message.requestId !== localRequestId || !activeRun || !isCurrentAnalysisRun(activeRun.runId, activeRun.key)) return;
     if (message.status === "completed") {
       state = { ...state, transcription: null, subtitle: "字幕生成完成", analysis: "分析中", progress: 70, progressLabel: "正在等待模型分析", progressState: "active" };
     } else {
+      if (message.jobId) activeRun.jobId = message.jobId;
       state = {
         ...state,
         subtitle: message.status === "downloading" ? "获取音频中" : "本机识别中",
@@ -89,13 +96,14 @@
     return { bvid, aid, cid, pageNumber, key: bvid || aid || cid || null, uploaderId, title, uploaderName, uploaderFace };
   }
 
-  function analysisMetadata(identity) {
+  function analysisMetadata(identity, subtitleSource = "") {
     return {
       bvid: identity.bvid || "",
       aid: identity.aid ? String(identity.aid) : "",
       title: identity.title || "",
       uploaderName: identity.uploaderName || "",
-      uploaderFace: identity.uploaderFace || ""
+      uploaderFace: identity.uploaderFace || "",
+      subtitleSource
     };
   }
 
@@ -163,6 +171,8 @@
   }
 
   function invalidateAnalysisRun() {
+    const jobId = activeLocalTranscription?.jobId;
+    if (jobId && chrome.runtime?.id) chrome.runtime.sendMessage({ type: "CANCEL_LOCAL_TRANSCRIPTION", jobId }).catch(() => {});
     analysisRunId += 1;
     localTranscriptionRunId += 1;
     localRequestId = null;
@@ -763,9 +773,10 @@
       }
       return;
     }
-    const result = await send({ type: "TRANSCRIBE_LOCAL", requestId, identity, audioUrls, duration: video?.duration });
+    const transcriptCacheKey = localTranscriptCacheKey(identity);
+    const result = await send({ type: "TRANSCRIBE_AND_ANALYZE_LOCAL", requestId, identity, audioUrls, duration: video?.duration, bvid: identity.bvid || `aid-${identity.aid}`, cacheKey: transcriptCacheKey || identity.key, force: true, metadata: analysisMetadata(identity, "local") });
     if (!isCurrentLocalRun()) return;
-    if (result.status !== "ready" || !result.timeline) {
+    if (result.status !== "completed") {
       state = { ...state, subtitle: "本机识别失败", analysis: result.error || "无法生成字幕", progress: 20, progressLabel: "流程未完成", progressState: "failed" };
       render();
       if (localRunId === localTranscriptionRunId) {
@@ -774,7 +785,6 @@
       }
       return;
     }
-    const transcriptCacheKey = localTranscriptCacheKey(identity);
     if (transcriptCacheKey) {
       await send({
         type: "SAVE_LOCAL_TRANSCRIPT",
@@ -787,11 +797,7 @@
         }
       });
     }
-    state = { ...state, transcription: null, subtitle: "已获取（本机语音识别）", analysis: "分析中", progress: 70, progressLabel: "正在等待模型分析", progressState: "active", debug: { ...state.debug, subtitleItems: result.subtitleItems || [] } };
-    render();
-    const analyzed = await send({ type: "ANALYZE", bvid: identity.bvid || `aid-${identity.aid}`, cacheKey: `${transcriptCacheKey || identity.key}:local`, timeline: result.timeline, duration: video?.duration, force: true, metadata: analysisMetadata(identity) });
-    if (!isCurrentLocalRun()) return;
-    state = { ...state, analysis: analyzed.status === "completed" ? `已完成（${analyzed.segments.length} 段）` : analyzed.error || "分析失败", progress: analyzed.status === "completed" ? 100 : 90, progressLabel: analyzed.status === "completed" ? "分析完成" : "流程未完成", progressState: analyzed.status === "completed" ? "completed" : "failed", segments: analyzed.segments || [], debug: { ...state.debug, request: analyzed.requestDebug || "", response: analyzed.responseDebug || "", reasoning: analyzed.reasoningDebug || "" } };
+    state = { ...state, transcription: null, subtitle: "已获取（本机语音识别）", analysis: result.status === "completed" ? `已完成（${result.segments.length} 段）` : result.error || "分析失败", progress: result.status === "completed" ? 100 : 90, progressLabel: result.status === "completed" ? "分析完成" : "流程未完成", progressState: result.status === "completed" ? "completed" : "failed", segments: result.segments || [], debug: { ...state.debug, subtitleItems: result.subtitleItems || [], request: result.requestDebug || "", response: result.responseDebug || "", reasoning: result.reasoningDebug || "" } };
     render();
     if (localRunId === localTranscriptionRunId) {
       localRequestId = null;
@@ -824,7 +830,7 @@
       if (!isCurrentAnalysisRun(runId, key)) return;
       state = { ...state, model: model.model, subtitle: "已获取（本机语音识别缓存）", analysis: "分析中", progress: 70, progressLabel: "正在等待模型分析", progressState: "active", debug: { ...state.debug, subtitleItems: cachedTranscript.subtitleItems || [] } };
       render();
-      const result = await send({ type: "ANALYZE", bvid: bvid || `aid-${identity.aid}`, cacheKey: `${transcriptCacheKey}:local`, timeline: cachedTranscript.timeline, duration: video?.duration || cachedTranscript.duration, force, metadata: analysisMetadata(identity) });
+      const result = await send({ type: "ANALYZE_SUBTITLE_RANGES", bvid: bvid || `aid-${identity.aid}`, cacheKey: `${transcriptCacheKey}:local`, subtitleItems: cachedTranscript.subtitleItems || [], duration: video?.duration || cachedTranscript.duration, force, metadata: analysisMetadata(identity, "local") });
       if (!isCurrentAnalysisRun(runId, key)) return;
       state = { ...state, analysis: result.status === "completed" ? `已完成（${result.segments.length} 段）` : result.status === "needs-settings" ? "请先在扩展设置中填写 API Key 和模型" : result.error || "分析失败", progress: result.status === "completed" ? 100 : 90, progressLabel: result.status === "completed" ? "分析完成" : "流程未完成", progressState: result.status === "completed" ? "completed" : "failed", segments: result.segments || [], debug: { ...state.debug, request: result.requestDebug || "", response: result.responseDebug || "", reasoning: result.reasoningDebug || "" }, uiMode: result.status === "needs-settings" ? "panel" : state.uiMode };
       render();
@@ -881,7 +887,7 @@
     }
     state = { ...state, subtitle: `已获取（${subtitles.subtitleName}）`, analysis: "分析中", progress: 70, progressLabel: "正在等待模型分析", progressState: "active", debug: { ...state.debug, subtitleItems: subtitles.subtitleItems || [] } };
     render();
-    const result = await send({ type: "ANALYZE", bvid: bvid || `aid-${identity.aid}`, cacheKey: key, timeline: subtitles.timeline, duration: video?.duration, force, metadata: analysisMetadata(refreshedIdentity) });
+    const result = await send({ type: "ANALYZE_SUBTITLE_RANGES", bvid: bvid || `aid-${identity.aid}`, cacheKey: key, subtitleItems: subtitles.subtitleItems || [], duration: video?.duration, force, metadata: analysisMetadata(refreshedIdentity, "bilibili") });
     if (!isCurrentAnalysisRun(runId, key)) return;
     state = { ...state, progress: 90, progressLabel: "正在解析识别结果", progressState: "active" };
     render();

@@ -76,6 +76,18 @@ class JobManagerTests(unittest.IsolatedAsyncioTestCase):
         replacement = await self.manager.create_if_capacity({"audio": {"urls": []}}, 1)
         self.assertIsNotNone(replacement)
 
+    def test_ranges_are_clamped_to_video_duration(self):
+        job = Job("ranges", {"video": {"duration": 100}, "options": {"ranges": [
+            {"start": 0, "end": 20}, {"start": 90, "end": 120}, {"start": 40, "end": 40}, {"start": 110, "end": 120}
+        ]}})
+        self.assertEqual(self.manager._ranges(job), [{"start": 0.0, "end": 20.0}, {"start": 90.0, "end": 100.0}])
+
+    async def test_waiting_job_can_be_resumed(self):
+        job = Job("waiting", {}, status="awaiting_continue")
+        self.manager.jobs[job.id] = job
+        self.assertTrue(await self.manager.continue_job(job.id))
+        self.assertTrue(job.continue_event.is_set())
+
 
 if __name__ == "__main__":
     unittest.main()

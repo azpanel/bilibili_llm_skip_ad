@@ -16,7 +16,7 @@ from .bilibili_audio import download_audio
 from .transcribe import Transcriber
 
 JOB_TTL = 3600
-ACTIVE_JOB_STATUSES = {"queued", "downloading", "transcribing"}
+ACTIVE_JOB_STATUSES = {"queued", "downloading", "transcribing", "awaiting_continue"}
 TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled"}
 
 
@@ -36,6 +36,9 @@ class Job:
     task: asyncio.Task | None = None
     directory: Path | None = None
     processing_started_at: float | None = None
+    completed_ranges: list[dict] = field(default_factory=list)
+    current_range: int = 0
+    continue_event: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 class JobManager:
@@ -64,14 +67,14 @@ class JobManager:
     def _create(self, request: dict) -> Job:
         job = Job(uuid.uuid4().hex, request)
         self.jobs[job.id] = job
-        self.received_jobs += 1
-        self.received_audio_seconds += self._audio_duration(job)
+        self.received_jobs = getattr(self, "received_jobs", 0) + 1
+        self.received_audio_seconds = getattr(self, "received_audio_seconds", 0.0) + self._audio_duration(job)
         job.task = asyncio.create_task(self._run(job))
         return job
 
     @staticmethod
     def _audio_duration(job: Job) -> float:
-        return float(job.request.get("video", {}).get("duration") or 0)
+        return sum(value["end"] - value["start"] for value in JobManager._ranges(job))
 
     def statistics(self) -> dict:
         efficiency = self.completed_audio_seconds / self.completed_processing_seconds if self.completed_processing_seconds else 0
@@ -97,6 +100,14 @@ class JobManager:
                 job.task.cancel()
             job.status = "cancelled"
             job.message = "已取消"
+            return True
+
+    async def continue_job(self, job_id: str) -> bool:
+        async with self.lock:
+            job = self.jobs.get(job_id)
+            if not job or job.status != "awaiting_continue":
+                return False
+            job.continue_event.set()
             return True
 
     async def cleanup_expired(self) -> None:
@@ -133,15 +144,27 @@ class JobManager:
                         errors.append(str(error))
                 else:
                     raise RuntimeError("所有音频地址均下载失败：" + "；".join(errors))
-                job.status, job.message, job.progress = "transcribing", "正在进行语音识别", 35
+                ranges = self._ranges(job)
                 job.transcription_started_at = time.time()
-                logger.info("任务 %s 开始 FFmpeg 转码和模型识别", job.id)
-                segments = await self.transcriber.run(source, wav, job.request.get("options", {}).get("language", "zh"), self._transcribe_progress(job))
+                all_segments = []
+                for index, selected_range in enumerate(ranges):
+                    job.current_range = index
+                    job.status, job.message = "transcribing", f"正在识别第 {index + 1}/{len(ranges)} 个范围"
+                    logger.info("任务 %s 开始识别范围 %d/%d", job.id, index + 1, len(ranges))
+                    range_wav = wav.with_name(f"audio-{index}.wav")
+                    segments = await self.transcriber.run(source, range_wav, job.request.get("options", {}).get("language", "zh"), self._transcribe_progress(job, ranges, index), selected_range["start"], selected_range["end"])
+                    completed = {"index": index, "start": selected_range["start"], "end": selected_range["end"], "segments": segments}
+                    job.completed_ranges.append(completed)
+                    all_segments.extend(segments)
+                    job.result = {"duration": job.request.get("video", {}).get("duration"), "language": "zh", "segments": all_segments, "completedRanges": job.completed_ranges}
+                    if index < len(ranges) - 1:
+                        job.status, job.message = "awaiting_continue", f"第 {index + 1}/{len(ranges)} 个范围识别完成，等待检查结果"
+                        job.continue_event.clear()
+                        await job.continue_event.wait()
                 job.status, job.message, job.progress = "completed", "识别完成", 100
                 self.completed_processing_seconds += time.time() - job.processing_started_at
                 self.completed_audio_seconds += self._audio_duration(job)
-                logger.info("任务 %s 识别完成，共 %d 段", job.id, len(segments))
-                job.result = {"duration": job.request.get("video", {}).get("duration"), "language": "zh", "segments": segments}
+                logger.info("任务 %s 识别完成，共 %d 段", job.id, len(all_segments))
         except asyncio.CancelledError:
             job.status, job.message = "cancelled", "已取消"
             logger.info("任务 %s 已取消", job.id)
@@ -163,22 +186,35 @@ class JobManager:
                 logger.info("任务 %s 下载进度 %d%%（%s）", job.id, job.progress, self._format_mb(size))
         return update
 
-    def _transcribe_progress(self, job):
+    @staticmethod
+    def _ranges(job: Job) -> list[dict]:
         duration = float(job.request.get("video", {}).get("duration") or 0)
+        values = job.request.get("options", {}).get("ranges") or [{"start": 0, "end": duration}]
+        ranges = []
+        for value in values:
+            start, end = float(value.get("start", 0)), float(value.get("end", duration))
+            end = min(end, duration) if duration else end
+            if start >= 0 and end > start:
+                ranges.append({"start": start, "end": end})
+        return ranges or [{"start": 0, "end": duration}]
+
+    def _transcribe_progress(self, job, ranges, range_index):
+        selected_duration = sum(value["end"] - value["start"] for value in ranges)
+        prior_duration = sum(value["end"] - value["start"] for value in ranges[:range_index])
 
         async def update(seconds: float):
             previous = job.progress
-            job.transcription_seconds = seconds
-            job.progress = min(69, 35 + int(seconds / duration * 34)) if duration else min(69, 35 + int(seconds / 60))
+            job.transcription_seconds = prior_duration + seconds
+            job.progress = min(69, 35 + int(job.transcription_seconds / selected_duration * 34)) if selected_duration else 35
             if job.transcription_started_at and seconds > 0:
                 elapsed = max(0.001, time.time() - job.transcription_started_at)
-                job.transcription_eta = max(0, elapsed * (duration / seconds - 1)) if duration else None
+                job.transcription_eta = max(0, elapsed * (selected_duration / job.transcription_seconds - 1)) if job.transcription_seconds else None
             if job.progress != previous:
                 logger.info("任务 %s 识别进度 %d%%（已处理 %.0f 秒，ETA %.0f 秒）", job.id, job.progress, seconds, job.transcription_eta or 0)
         return update
 
     def transcription_details(self, job: Job) -> dict:
-        duration = float(job.request.get("video", {}).get("duration") or 0)
+        duration = sum(value["end"] - value["start"] for value in self._ranges(job))
         return {
             "seconds": round(job.transcription_seconds, 1),
             "duration": round(duration, 1) if duration else None,
@@ -190,4 +226,3 @@ class JobManager:
         if job.directory:
             await asyncio.to_thread(shutil.rmtree, job.directory, True)
             job.directory = None
-

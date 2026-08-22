@@ -1,5 +1,6 @@
 import { normalizeSubtitleBodies, toTimelineText } from "./lib/subtitles.js";
 import { extractJson, normalizeSegments } from "./lib/segments.js";
+import { normalizeRecognitionRules, planRecognitionRanges, recognitionRuleFingerprint, subtitleItemsForRanges } from "./lib/recognition-rules.js";
 
 import { normalizeOpenRouterCatalog } from "./lib/model-catalog.js";
 import { ANALYSIS_HISTORY_KEY, normalizeHistoryRecord, upsertHistory } from "./lib/history.js";
@@ -289,6 +290,7 @@ async function transcribeLocally({ requestId, identity, audioUrls, duration }, t
     chrome.tabs.sendMessage(tabId, {
       type: "LOCAL_TRANSCRIPTION_PROGRESS",
       requestId,
+      jobId: job.jobId,
       status: job.status,
       progress: job.progress,
       message: job.message,
@@ -320,6 +322,86 @@ async function transcribeLocally({ requestId, identity, audioUrls, duration }, t
   throw new Error("本机语音识别任务超过 15 分钟仍未完成，请查看服务日志。");
 }
 
+async function transcribeAndAnalyzeLocally({ requestId, identity, audioUrls, duration, bvid, cacheKey, force, metadata = {} }, tabId) {
+  const sync = await chrome.storage.sync.get(["durationThresholdMinutes", "longVideoMode", "headTailMinutes", "chunkMinutes"]);
+  const rules = normalizeRecognitionRules(sync);
+  const plan = planRecognitionRanges(duration, rules);
+  const videoDuration = Number(duration);
+  const ranges = plan.ranges.map((range) => ({
+    start: plan.mode === "chunks" ? Math.max(0, range.start - 15) : range.start,
+    end: plan.mode === "chunks" ? Math.min(videoDuration, range.end + 15) : (Number.isFinite(range.end) ? range.end : videoDuration)
+  })).filter((range) => Number.isFinite(range.end) && range.end > range.start);
+  const fingerprint = recognitionRuleFingerprint(rules);
+  let lastReportedProgress = null;
+  const reportProgress = (job) => {
+    if (tabId == null) return;
+    const key = JSON.stringify([job.status, job.progress, job.message, job.currentRange, job.transcription]);
+    if (key === lastReportedProgress) return;
+    lastReportedProgress = key;
+    chrome.tabs.sendMessage(tabId, { type: "LOCAL_TRANSCRIPTION_PROGRESS", requestId, jobId, status: job.status, progress: job.progress, message: job.message, transcription: job.transcription }).catch(() => {});
+  };
+  const health = await fetchLocal("/v1/health");
+  if (!health.ok) throw new Error(`本机识别服务不可用（${health.status}）。`);
+  const created = await fetchLocal("/v1/transcriptions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ requestId, video: { ...identity, duration }, audio: { urls: audioUrls }, options: { language: "zh", ranges } })
+  });
+  if (!created.ok) throw new Error(`提交本机识别任务失败（${created.status}）。`);
+  const { jobId } = await created.json();
+  const deadline = Date.now() + LOCAL_TOTAL_TIMEOUT;
+  let processedRanges = 0;
+  const collectedItems = [];
+  const collectedItemKeys = new Set();
+  try {
+    while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, LOCAL_POLL_INTERVAL));
+    const response = await fetchLocal(`/v1/transcriptions/${encodeURIComponent(jobId)}`, {}, LOCAL_STATUS_TIMEOUT);
+    if (!response.ok) throw new Error(`查询本机识别任务失败（${response.status}）。`);
+    const job = await response.json();
+    reportProgress(job);
+    const completedRanges = job.completedRanges || [];
+    while (processedRanges < completedRanges.length) {
+      const completed = completedRanges[processedRanges];
+      const items = normalizeSubtitleBodies((completed.segments || []).map((segment) => ({ from: segment.start, to: segment.end, content: segment.text })));
+      items.forEach((item) => {
+        const key = `${item.start}:${item.end}:${item.text}`;
+        if (!collectedItemKeys.has(key)) {
+          collectedItemKeys.add(key);
+          collectedItems.push(item);
+        }
+      });
+      processedRanges += 1;
+      if (plan.mode === "chunks") {
+        if (tabId != null) chrome.tabs.sendMessage(tabId, { type: "ANALYSIS_RANGE_PROGRESS", index: processedRanges, total: ranges.length, mode: plan.mode }).catch(() => {});
+        const timeline = toTimelineText(items);
+        if (!timeline) continue;
+        const result = await analyze({ bvid, cacheKey: `${cacheKey}:local:rules:${fingerprint}:chunks:${processedRanges - 1}`, timeline, duration, force, metadata });
+        if (result.status !== "completed" || result.segments.length) {
+          return { ...result, subtitleItems: collectedItems, timeline: toTimelineText(collectedItems), checkedRanges: processedRanges, rangeTotal: ranges.length, mode: plan.mode };
+        }
+      }
+    }
+    if (job.status === "awaiting_continue") {
+      const continued = await fetchLocal(`/v1/transcriptions/${encodeURIComponent(jobId)}/continue`, { method: "POST" });
+      if (!continued.ok) throw new Error(`继续本机分段识别失败（${continued.status}）。`);
+      continue;
+    }
+    if (job.status === "completed") {
+      if (plan.mode === "chunks") return { status: "completed", segments: [], subtitleItems: collectedItems, timeline: toTimelineText(collectedItems), checkedRanges: processedRanges, rangeTotal: ranges.length, mode: plan.mode };
+      const timeline = toTimelineText(collectedItems);
+      if (!timeline) return { status: "completed", segments: [], subtitleItems: [], timeline: "", checkedRanges: processedRanges, rangeTotal: ranges.length, mode: plan.mode };
+      const result = await analyze({ bvid, cacheKey: `${cacheKey}:local:rules:${fingerprint}:${plan.mode}:0`, timeline, duration, force, metadata });
+      return { ...result, subtitleItems: collectedItems, timeline: toTimelineText(collectedItems), checkedRanges: processedRanges, rangeTotal: ranges.length, mode: plan.mode };
+    }
+      if (job.status === "failed" || job.status === "cancelled") throw new Error(job.error || job.message || "本机语音识别失败。");
+    }
+    throw new Error("本机语音识别任务超过 15 分钟仍未完成，请查看服务日志。");
+  } finally {
+    await cancelLocalTranscription(jobId);
+  }
+}
+
 async function cancelLocalTranscription(jobId) {
   if (!jobId) return;
   await fetch(`${LOCAL_TRANSCRIBER_URL}/v1/transcriptions/${encodeURIComponent(jobId)}`, { method: "DELETE" }).catch(() => {});
@@ -328,6 +410,10 @@ async function cancelLocalTranscription(jobId) {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "TRANSCRIBE_LOCAL") {
     transcribeLocally(message, _sender.tab?.id).then(sendResponse).catch((error) => sendResponse({ status: "failed", error: localError(error, "本机语音识别失败。") }));
+    return true;
+  }
+  if (message.type === "TRANSCRIBE_AND_ANALYZE_LOCAL") {
+    transcribeAndAnalyzeLocally(message, _sender.tab?.id).then(sendResponse).catch((error) => sendResponse({ status: "failed", error: localError(error, "本机分段识别失败。") }));
     return true;
   }
   if (message.type === "CANCEL_LOCAL_TRANSCRIPTION") {
@@ -439,9 +525,47 @@ async function analyze({ bvid, cacheKey = bvid, timeline, duration, force, metad
   }
 }
 
+function combineDebug(results, field) {
+  return results.map((result, index) => result?.[field] ? `--- 第 ${index + 1} 次请求 ---\n${result[field]}` : "").filter(Boolean).join("\n\n");
+}
+
+async function analyzeSubtitleRanges({ bvid, cacheKey = bvid, subtitleItems, duration, force, metadata = {} }, tabId) {
+  const sync = await chrome.storage.sync.get(["durationThresholdMinutes", "longVideoMode", "headTailMinutes", "chunkMinutes"]);
+  const rules = normalizeRecognitionRules(sync);
+  const plan = planRecognitionRanges(duration, rules);
+  const groups = plan.mode === "chunks" ? plan.ranges.map((range) => [range]) : [plan.ranges];
+  const fingerprint = recognitionRuleFingerprint(rules);
+  const results = [];
+  for (let index = 0; index < groups.length; index += 1) {
+    const items = subtitleItemsForRanges(subtitleItems, groups[index]);
+    const timeline = toTimelineText(items);
+    if (!timeline) continue;
+    if (tabId != null) chrome.tabs.sendMessage(tabId, { type: "ANALYSIS_RANGE_PROGRESS", index: index + 1, total: groups.length, mode: plan.mode }).catch(() => {});
+    const result = await analyze({ bvid, cacheKey: `${cacheKey}:rules:${fingerprint}:${plan.mode}:${index}`, timeline, duration, force, metadata });
+    results.push(result);
+    if (result.status !== "completed") return { ...result, mode: plan.mode, rangeIndex: index + 1, rangeTotal: groups.length };
+    if (result.segments.length) break;
+  }
+  const segments = results.flatMap((result) => result.segments || []);
+  return {
+    status: "completed",
+    segments: normalizeSegments({ segments }, duration),
+    mode: plan.mode,
+    checkedRanges: results.length,
+    rangeTotal: groups.length,
+    requestDebug: combineDebug(results, "requestDebug"),
+    responseDebug: combineDebug(results, "responseDebug"),
+    reasoningDebug: combineDebug(results, "reasoningDebug")
+  };
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "FETCH_SUBTITLES") {
     fetchSubtitles(message).then(sendResponse).catch((error) => sendResponse({ status: "failed", error: error.message || "字幕获取失败。" }));
+    return true;
+  }
+  if (message.type === "ANALYZE_SUBTITLE_RANGES") {
+    analyzeSubtitleRanges(message, _sender.tab?.id).then(sendResponse).catch((error) => sendResponse({ status: "failed", error: error.message || "分段分析失败。" }));
     return true;
   }
   if (message.type === "GET_MODEL") {

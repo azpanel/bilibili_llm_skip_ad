@@ -58,8 +58,8 @@ class Transcriber:
             self._model = WhisperModel(self.model_name, **model_options)
         return self._model
 
-    async def run(self, source: Path, wav_path: Path, language: str = "zh", progress=None) -> list[dict]:
-        await asyncio.to_thread(self._convert, source, wav_path)
+    async def run(self, source: Path, wav_path: Path, language: str = "zh", progress=None, start: float = 0, end: float | None = None) -> list[dict]:
+        await asyncio.to_thread(self._convert, source, wav_path, start, end)
         model = await asyncio.to_thread(self._load_model)
         updates = queue.Queue()
         worker = asyncio.create_task(asyncio.to_thread(self._transcribe, model, wav_path, language, updates))
@@ -79,6 +79,10 @@ class Transcriber:
                 break
             if progress:
                 await progress(seconds)
+        if start:
+            for segment in result:
+                segment["start"] = round(segment["start"] + start, 3)
+                segment["end"] = round(segment["end"] + start, 3)
         return result
 
     def _transcribe(self, model, wav_path: Path, language: str, updates: queue.Queue) -> list[dict]:
@@ -102,7 +106,7 @@ class Transcriber:
 
 
     @staticmethod
-    def _convert(source: Path, target: Path) -> None:
+    def _convert(source: Path, target: Path, start: float = 0, end: float | None = None) -> None:
         ffmpeg = shutil.which("ffmpeg")
         if ffmpeg is None:
             try:
@@ -110,7 +114,13 @@ class Transcriber:
                 ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
             except (ImportError, RuntimeError) as exc:
                 raise TranscriptionError("FFmpeg 不可用，请重新运行启动脚本安装依赖") from exc
-        command = [ffmpeg, "-y", "-i", str(source), "-map", "0:a:0", "-ac", "1", "-ar", "16000", "-f", "wav", str(target)]
+        command = [ffmpeg, "-y"]
+        if start > 0:
+            command.extend(["-ss", str(start)])
+        command.extend(["-i", str(source)])
+        if end is not None and end > start:
+            command.extend(["-t", str(end - start)])
+        command.extend(["-map", "0:a:0", "-ac", "1", "-ar", "16000", "-f", "wav", str(target)])
         completed = subprocess.run(command, capture_output=True, text=True, timeout=600)
         if completed.returncode:
             raise TranscriptionError(f"FFmpeg 转码失败：{completed.stderr[-500:]}")
