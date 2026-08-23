@@ -242,6 +242,8 @@ function formatDurationValue(seconds) {
 
 function chartOptions(metric, name, data, categories, color, formatter) {
   const allowMotion = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const labelStep = categories.length > 14 ? Math.ceil((categories.length - 1) / 10) : 1;
+  const visibleLabels = new Set(categories.filter((_label, index) => index % labelStep === 0 || index === categories.length - 1));
   return {
     chart: { type: "area", height: 250, fontFamily: "inherit", foreColor: "#667382", toolbar: { show: false }, zoom: { enabled: false }, animations: { enabled: allowMotion, easing: "easeinout", speed: 520, animateGradually: { enabled: allowMotion, delay: 45 }, dynamicAnimation: { enabled: allowMotion, speed: 420 } }, events: { dataPointSelection: (_event, _context, config) => { const row = statisticsRows[config.dataPointIndex]; if (row) showStatisticsBreakdown(metric, row); } } },
     series: [{ name, data }],
@@ -251,7 +253,7 @@ function chartOptions(metric, name, data, categories, color, formatter) {
     markers: { size: 4, strokeWidth: 0, hover: { size: 7 } },
     fill: { type: "gradient", gradient: { shadeIntensity: .2, opacityFrom: .36, opacityTo: .04, stops: [0, 88, 100] } },
     grid: { borderColor: "#e7edf4", strokeDashArray: 4, padding: { left: 8, right: 12 } },
-    xaxis: { categories, axisBorder: { show: false }, axisTicks: { show: false }, labels: { rotate: 0, hideOverlappingLabels: true, trim: false } },
+    xaxis: { categories, axisBorder: { show: false }, axisTicks: { show: false }, labels: { rotate: 0, hideOverlappingLabels: true, trim: false, formatter: (value) => visibleLabels.has(value) ? value : "" } },
     yaxis: { min: 0, forceNiceScale: true, labels: { formatter } },
     tooltip: { theme: "light", shared: false, intersect: true, y: { formatter } },
     legend: { show: false }
@@ -262,6 +264,11 @@ function breakdownFormatter(metric, value) {
   if (metric === "duration") return formatDurationValue(value);
   if (metric === "tokens") return `${new Intl.NumberFormat("zh-CN").format(Math.round(value))} tokens`;
   return formatDisplayCost(value);
+}
+
+function truncateChartLabel(value, maxLength = 32) {
+  const label = String(value || "");
+  return label.length > maxLength ? `${label.slice(0, maxLength)}...` : label;
 }
 
 function hideStatisticsBreakdown() {
@@ -287,7 +294,7 @@ function showStatisticsBreakdown(metric, row) {
     chart: { type: "pie", height: 330, fontFamily: "inherit", animations: { enabled: allowMotion, easing: "easeinout", speed: 480 } },
     series: values.map((item) => item.value),
     labels: values.map((item) => item.label),
-    legend: { position: "right", fontSize: "12px" },
+    legend: { position: "right", fontSize: "12px", formatter: (seriesName) => truncateChartLabel(seriesName) },
     dataLabels: { enabled: true, formatter: (percentage) => percentage >= 4 ? `${percentage.toFixed(1)}%` : "" },
     stroke: { colors: ["#fff"], width: 2 },
     tooltip: { y: { formatter: (value) => breakdownFormatter(metric, value) } },

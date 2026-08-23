@@ -254,6 +254,7 @@
 .history-page-button { min-width: 34px; height: 34px; padding: 0 10px; border: 1px solid var(--tblr-border-color); border-radius: 7px; background: var(--tblr-bg-surface); color: var(--tblr-body-color); font-size: 12px; cursor: pointer; transition: color .18s ease, border-color .18s ease, background .18s ease, transform .18s ease; }
 .history-page-button:hover:not(:disabled) { border-color: var(--tblr-primary); color: var(--tblr-primary); transform: translateY(-1px); }
 .history-page-button.is-active { border-color: var(--tblr-primary); background: var(--tblr-primary); color: #fff; }
+.history-page-button.is-active:hover { color: #fff; }
 .history-page-button:disabled { opacity: .45; cursor: not-allowed; }
 .history-page-enter { animation: history-card-enter .28s cubic-bezier(.2, .8, .2, 1) both; animation-delay: var(--history-enter-delay, 0ms); }
 
