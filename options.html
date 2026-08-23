@@ -212,6 +212,19 @@
                   </div>
                 </div>
                 <div id="statistics-notice" class="alert d-none" role="status"></div>
+                <article class="viewing-activity-card" aria-labelledby="viewing-activity-title">
+                  <div class="viewing-activity-heading">
+                    <div><h3 id="viewing-activity-title">观看活跃度</h3><p id="viewing-activity-summary"></p></div>
+                    <div class="viewing-activity-legend" aria-label="观看数量图例"><span>少</span><i data-level="0"></i><i data-level="1"></i><i data-level="2"></i><i data-level="3"></i><i data-level="4"></i><span>多</span></div>
+                  </div>
+                  <div class="viewing-activity-body">
+                    <div id="viewing-activity-hours" class="viewing-activity-hours" aria-hidden="true"></div>
+                    <div class="viewing-activity-scroll">
+                      <div id="viewing-activity-dates" class="viewing-activity-dates" aria-hidden="true"></div>
+                      <div id="viewing-activity-grid" class="viewing-activity-grid" role="img" aria-label="按日期和小时统计的观看视频数量"></div>
+                    </div>
+                  </div>
+                </article>
                 <div class="statistics-grid">
                   <article class="statistics-chart-card"><div><h3>识别到的广告时长</h3><span id="statistics-duration-total"></span></div><div id="statistics-duration-chart" class="statistics-chart" aria-label="每日识别到的广告时长图表"></div></article>
                   <article class="statistics-chart-card"><div><h3>Token 数</h3><span id="statistics-token-total"></span></div><div id="statistics-token-chart" class="statistics-chart" aria-label="每日 Token 数图表"></div></article>

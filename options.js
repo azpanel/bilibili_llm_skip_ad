@@ -1,7 +1,7 @@
 import { filterModels, formatModelPrices } from "./lib/model-catalog.js";
 import { diffLines } from "./lib/text-diff.js";
 import { DEFAULT_RECOGNITION_RULES, normalizeRecognitionRules } from "./lib/recognition-rules.js";
-import { aggregateDailyStatistics, dailyMetricBreakdown } from "./lib/statistics.js";
+import { aggregateDailyStatistics, buildViewingActivity, dailyMetricBreakdown } from "./lib/statistics.js";
 
 const DEFAULT_PROMPT = `你是视频跳过片段识别助手。你的唯一任务是：根据视频标题、简介和带时间戳字幕，找出“与视频主线无关、观众跳过后不影响理解视频主要内容”的商业植入/赞助推广片段。
 
@@ -98,6 +98,10 @@ const historyOnlyWithAdsInput = document.querySelector("#history-only-with-ads")
 const statisticsNotice = document.querySelector("#statistics-notice");
 const statisticsWindowButtons = [...document.querySelectorAll("[data-statistics-days]")];
 const statisticsBreakdown = document.querySelector("#statistics-breakdown");
+const viewingActivitySummary = document.querySelector("#viewing-activity-summary");
+const viewingActivityHours = document.querySelector("#viewing-activity-hours");
+const viewingActivityDates = document.querySelector("#viewing-activity-dates");
+const viewingActivityGrid = document.querySelector("#viewing-activity-grid");
 const deleteHistoryModalElement = document.querySelector("#delete-history-modal");
 const currencySettingsModalElement = document.querySelector("#currency-settings-modal");
 const currencySelect = document.querySelector("#currency-select");
@@ -316,7 +320,39 @@ function upsertStatisticsChart(key, selector, options) {
   chart.render();
 }
 
+function renderViewingActivity() {
+  const activityDays = 45;
+  const activity = buildViewingActivity(historyRecords, activityDays);
+  viewingActivitySummary.textContent = `根据识别历史，最近 ${activityDays} 日共观看 ${new Intl.NumberFormat("zh-CN").format(activity.total)} 个视频`;
+  viewingActivityHours.replaceChildren();
+  viewingActivityDates.replaceChildren();
+  viewingActivityGrid.replaceChildren();
+  viewingActivityDates.style.setProperty("--activity-days", activity.dates.length);
+  viewingActivityGrid.style.setProperty("--activity-days", activity.dates.length);
+  for (const date of activity.dates) {
+    const label = document.createElement("span");
+    label.textContent = date.label;
+    viewingActivityDates.append(label);
+  }
+  for (const hour of activity.hours) {
+    const hourLabel = document.createElement("span");
+    hourLabel.textContent = hour.label;
+    viewingActivityHours.append(hourLabel);
+    for (const day of hour.cells) {
+      const cell = document.createElement("span");
+      cell.className = "viewing-activity-day";
+      cell.dataset.level = String(day.level);
+      const description = `${day.key} ${String(day.hour).padStart(2, "0")}:00–${String(day.hour).padStart(2, "0")}:59：观看 ${day.count} 个视频`;
+      cell.title = description;
+      cell.setAttribute("aria-label", description);
+      cell.tabIndex = 0;
+      viewingActivityGrid.append(cell);
+    }
+  }
+}
+
 function renderStatistics() {
+  renderViewingActivity();
   if (!window.ApexCharts) {
     statisticsNotice.textContent = "ApexCharts 加载失败，无法绘制统计图表。";
     statisticsNotice.className = "alert alert-danger";
