@@ -541,7 +541,12 @@ async function analyze({ bvid, cacheKey = bvid, timeline, duration, force, metad
   try {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${local.openRouterApiKey}` },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${local.openRouterApiKey}`,
+        "HTTP-Referer": "https://github.com/azpanel/bilibili_llm_skip_ad",
+        "X-OpenRouter-Title": "Bili Ad Skip"
+      },
       body: JSON.stringify(requestBody)
     });
     responseText = await response.text();
