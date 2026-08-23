@@ -146,6 +146,12 @@
   gap: 16px;
 }
 
+.history-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
 #panel-history {
   position: relative;
   padding-bottom: 68px;
@@ -266,6 +272,13 @@
 .history-segment {
   cursor: help;
   font: 12px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.history-no-ad {
+  align-self: center;
+  color: var(--tblr-secondary-color);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .history-usage {
@@ -657,6 +670,8 @@ code {
   .history-card {
     grid-template-columns: 1fr;
   }
+  .history-heading,
+  .history-actions { align-items: stretch; flex-direction: column; }
   .statistics-heading { align-items: stretch; flex-direction: column; }
   .statistics-window { display: grid; grid-template-columns: 1.3fr repeat(4, 1fr); }
   .statistics-window button { min-width: 0; }

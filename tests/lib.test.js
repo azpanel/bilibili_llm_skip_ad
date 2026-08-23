@@ -106,8 +106,10 @@ test("逐行提示词差异保留行号并标记新增和删除", () => {
   ]);
 });
 
-test("识别历史只接受含广告的视频并按视频去重更新", () => {
-  assert.equal(normalizeHistoryRecord({ bvid: "BV1demo", segments: [] }), null);
+test("识别历史接受无广告的已完成识别并按视频去重更新", () => {
+  const noAd = normalizeHistoryRecord({ bvid: "BV1clean", title: "无广告视频", segments: [], usage: { totalTokens: 50 } });
+  assert.deepEqual(noAd.segments, []);
+  assert.equal(noAd.usage.totalTokens, 50);
   const first = normalizeHistoryRecord({ bvid: "BV1demo", title: "视频", segments: [{ start: 10, end: 20, reason: "推广" }], usage: { totalTokens: 100, cost: 0.01 }, recognizedAt: 1 });
   const updated = normalizeHistoryRecord({ bvid: "BV1demo", title: "新标题", segments: [{ start: 30, end: 40, reason: "赞助" }], recognizedAt: 2 });
   assert.deepEqual(upsertHistory([first], updated), [updated]);

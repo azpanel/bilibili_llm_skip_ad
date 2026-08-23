@@ -94,6 +94,7 @@ const promptDiffModalElement = document.querySelector("#prompt-diff-modal");
 const historyList = document.querySelector("#history-list");
 const historyNotice = document.querySelector("#history-notice");
 const historyPagination = document.querySelector("#history-pagination");
+const historyOnlyWithAdsInput = document.querySelector("#history-only-with-ads");
 const statisticsNotice = document.querySelector("#statistics-notice");
 const statisticsWindowButtons = [...document.querySelectorAll("[data-statistics-days]")];
 const statisticsBreakdown = document.querySelector("#statistics-breakdown");
@@ -135,6 +136,7 @@ let marketLoading = false;
 let historyRecords = [];
 let historyLoaded = false;
 let historyPage = 1;
+let historyOnlyWithAds = false;
 const HISTORY_PAGE_SIZE = 10;
 let historyPageTransitioning = false;
 let pendingHistoryDelete = null;
@@ -334,17 +336,20 @@ function renderStatistics() {
 function renderHistory() {
   historyList.replaceChildren();
   historyPagination.replaceChildren();
-  if (!historyRecords.length) {
+  const visibleRecords = historyOnlyWithAds
+    ? historyRecords.filter((record) => Array.isArray(record.segments) && record.segments.length)
+    : historyRecords;
+  if (!visibleRecords.length) {
     const empty = document.createElement("div");
     empty.className = "history-empty";
-    empty.textContent = "还没有识别到广告的视频记录。";
+    empty.textContent = historyOnlyWithAds ? "还没有识别到广告的视频记录。" : "还没有已完成的识别记录。";
     historyList.append(empty);
     return;
   }
 
-  const pageCount = Math.max(1, Math.ceil(historyRecords.length / HISTORY_PAGE_SIZE));
+  const pageCount = Math.max(1, Math.ceil(visibleRecords.length / HISTORY_PAGE_SIZE));
   historyPage = Math.min(Math.max(1, historyPage), pageCount);
-  const pageRecords = historyRecords.slice((historyPage - 1) * HISTORY_PAGE_SIZE, historyPage * HISTORY_PAGE_SIZE);
+  const pageRecords = visibleRecords.slice((historyPage - 1) * HISTORY_PAGE_SIZE, historyPage * HISTORY_PAGE_SIZE);
   let recordIndex = 0;
   for (const record of pageRecords) {
     const card = document.createElement("article");
@@ -408,6 +413,12 @@ function renderHistory() {
       badge.setAttribute("data-bs-placement", "top");
       segments.append(badge);
       tabler.Tooltip.getOrCreateInstance(badge);
+    }
+    if (!record.segments?.length) {
+      const noAd = document.createElement("span");
+      noAd.className = "history-no-ad";
+      noAd.innerHTML = '<i class="ti ti-circle-check me-1 text-success" aria-hidden="true"></i>未识别到广告';
+      segments.append(noAd);
     }
 
     const usage = document.createElement("div");
@@ -1134,6 +1145,11 @@ saveCurrencySettingsButton.addEventListener("click", async () => {
   }
 });
 document.querySelector("#refresh-history").addEventListener("click", () => loadHistory(true));
+historyOnlyWithAdsInput.addEventListener("change", () => {
+  historyOnlyWithAds = historyOnlyWithAdsInput.checked;
+  historyPage = 1;
+  renderHistory();
+});
 confirmDeleteHistoryButton.addEventListener("click", async () => {
   if (!pendingHistoryDelete) return;
   confirmDeleteHistoryButton.disabled = true;

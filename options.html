@@ -179,11 +179,17 @@
                 <div class="mb-4 history-heading">
                   <div>
                     <h2 class="mb-1">识别历史</h2>
-                    <p class="text-secondary mb-0">仅记录识别到广告的视频，数据保存在当前设备。</p>
+                    <p class="text-secondary mb-0">记录已完成识别的视频，数据保存在当前设备。</p>
                   </div>
-                  <button id="refresh-history" type="button" class="btn btn-sm btn-outline-secondary">
-                    <i class="ti ti-refresh me-1" aria-hidden="true"></i>刷新
-                  </button>
+                  <div class="history-actions">
+                    <label class="form-check form-switch mb-0" for="history-only-with-ads">
+                      <input id="history-only-with-ads" class="form-check-input" type="checkbox" role="switch">
+                      <span class="form-check-label">仅显示有广告</span>
+                    </label>
+                    <button id="refresh-history" type="button" class="btn btn-sm btn-outline-secondary">
+                      <i class="ti ti-refresh me-1" aria-hidden="true"></i>刷新
+                    </button>
+                  </div>
                 </div>
                 <div id="history-notice" class="alert d-none" role="status"></div>
                 <div id="history-list" class="history-list" aria-live="polite"></div>
