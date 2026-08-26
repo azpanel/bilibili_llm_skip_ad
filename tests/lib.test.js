@@ -151,6 +151,7 @@ test("OpenRouter 目录只保留可用于文本聊天的公开模型", () => {
   const models = normalizeOpenRouterCatalog({ data: [
     compatible,
     compatible,
+    { ...compatible, name: "OpenAI: GPT Demo (batch)", endpoint: { ...compatible.endpoint, variant: "batch" } },
     { ...compatible, slug: "openai/transcribe", input_modalities: ["audio"], output_modalities: ["transcription"], has_text_output: false },
     { ...compatible, slug: "openai/hidden", hidden: true },
     { ...compatible, slug: "openai/disabled", endpoint: { ...compatible.endpoint, is_disabled: true } }
@@ -158,9 +159,33 @@ test("OpenRouter 目录只保留可用于文本聊天的公开模型", () => {
 
   assert.equal(models.length, 1);
   assert.equal(models[0].slug, "openai/gpt-demo");
+  assert.equal(models[0].name, "OpenAI: GPT Demo");
   assert.equal(models[0].createdAt, "2026-08-05T19:48:07.643Z");
   assert.equal(models[0].iconUrl, "https://openrouter.ai/images/icons/OpenAI.svg");
   assert.deepEqual(formatModelPrices(models[0]), ["Input Price $1.25/M tokens", "Output Price $4.25/M tokens"]);
+});
+
+test("OpenRouter 目录排除 batch 端点并保留同 slug 的标准端点", () => {
+  const base = {
+    slug: "anthropic/claude-sonnet-demo",
+    short_name: "Claude Sonnet Demo",
+    author: "anthropic",
+    input_modalities: ["text"],
+    output_modalities: ["text"],
+    has_text_output: true,
+    endpoint: {
+      has_chat_completions: true,
+      is_free: false,
+      display_pricing: []
+    }
+  };
+  const models = normalizeOpenRouterCatalog({ data: [
+    { ...base, name: "Anthropic: Claude Sonnet Demo (batch)", endpoint: { ...base.endpoint, variant: "batch" } },
+    { ...base, name: "Anthropic: Claude Sonnet Demo", endpoint: { ...base.endpoint, variant: "standard" } }
+  ] });
+
+  assert.equal(models.length, 1);
+  assert.equal(models[0].name, "Anthropic: Claude Sonnet Demo");
 });
 
 test("模型市场支持组合搜索、开发者筛选和特殊价格状态", () => {

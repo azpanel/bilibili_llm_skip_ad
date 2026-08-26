@@ -469,6 +469,17 @@
   font-size: 12px;
 }
 
+.model-market-meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.model-market-meta-item > .ti {
+  flex: 0 0 auto;
+  font-size: 14px;
+}
+
 .model-market-empty {
   grid-column: 1 / -1;
   border: 1px dashed var(--tblr-border-color);

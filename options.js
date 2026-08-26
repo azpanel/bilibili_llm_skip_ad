@@ -735,19 +735,30 @@ function renderModelMarketResults() {
     prices.className = "model-market-prices";
     formatModelPrices(model).forEach((price) => {
       const item = document.createElement("span");
-      item.textContent = price;
+      item.className = "model-market-meta-item";
+      const priceIcon = document.createElement("i");
+      priceIcon.className = `ti ${/^Input Price/i.test(price) ? "ti-login" : /^Output Price/i.test(price) ? "ti-logout" : "ti-coins"}`;
+      priceIcon.setAttribute("aria-hidden", "true");
+      item.append(priceIcon, document.createTextNode(price));
       prices.append(item);
     });
 
     const published = document.createElement("div");
-    published.className = "model-market-published";
-    published.textContent = formatPublishedDate(model.createdAt);
+    published.className = "model-market-published model-market-meta-item";
+    const publishedIcon = document.createElement("i");
+    publishedIcon.className = "ti ti-calendar-time";
+    publishedIcon.setAttribute("aria-hidden", "true");
+    published.append(publishedIcon, document.createTextNode(formatPublishedDate(model.createdAt)));
 
     const footer = document.createElement("div");
     footer.className = "model-market-card-footer mt-auto";
     const context = document.createElement("span");
-    context.className = "text-secondary small";
+    context.className = "text-secondary small model-market-meta-item";
     context.textContent = model.contextLength ? `上下文 ${model.contextLength.toLocaleString("en-US")} tokens` : "上下文长度未知";
+    const contextIcon = document.createElement("i");
+    contextIcon.className = "ti ti-brackets-contain";
+    contextIcon.setAttribute("aria-hidden", "true");
+    context.prepend(contextIcon);
     const add = document.createElement("button");
     add.type = "button";
     add.className = "btn btn-sm btn-primary";
