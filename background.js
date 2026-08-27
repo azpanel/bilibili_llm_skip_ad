@@ -555,9 +555,10 @@ async function analyze({ bvid, cacheKey = bvid, timeline, duration, force, metad
     const message = payload?.choices?.[0]?.message;
     const content = message?.content;
     const reasoningDebug = typeof message?.reasoning === "string" ? message.reasoning : "";
+    const responseDebug = typeof content === "string" ? content.trim() : responseText.trim();
     const segments = normalizeSegments(extractJson(content), duration);
     const usage = normalizeUsage(payload?.usage);
-    const result = { status: "completed", segments, usage, model: sync.model, requestDebug, responseDebug: responseText, reasoningDebug };
+    const result = { status: "completed", segments, usage, model: sync.model, requestDebug, responseDebug, reasoningDebug };
     await chrome.storage.session.set({ [`analysis:${cacheKey}`]: result });
     await saveAnalysisHistory({ ...metadata, model: sync.model }, segments, usage);
     return result;
