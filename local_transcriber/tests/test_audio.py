@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from local_transcriber.bilibili_audio import validate_audio_url
+from local_transcriber.bilibili_audio import system_ssl_context, validate_audio_url
 
 
 PUBLIC_CDN = "https://xy120x209x102x30xy.mcdn.bilivideo.cn:8082/audio.m4s?token=1"
@@ -9,6 +9,13 @@ FALLBACK_CDN = "https://809aj93l.edge.mountaintoys.cn:4483/audio.m4s?token=1"
 
 
 class AudioUrlTests(unittest.TestCase):
+    @patch("local_transcriber.bilibili_audio.truststore.SSLContext")
+    def test_uses_operating_system_trust_store(self, ssl_context):
+        context = system_ssl_context()
+
+        ssl_context.assert_called_once()
+        self.assertIs(context, ssl_context.return_value)
+
     @patch("local_transcriber.bilibili_audio._is_private_host", return_value=False)
     def test_accepts_bilibili_cdn(self, _private):
         validate_audio_url(PUBLIC_CDN)
@@ -30,4 +37,3 @@ class AudioUrlTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

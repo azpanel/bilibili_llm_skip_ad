@@ -15,7 +15,7 @@ if not exist "%PYTHON%" (
     if errorlevel 1 goto setup_failed
 )
 
-"%PYTHON%" -c "import fastapi, uvicorn, faster_whisper, imageio_ffmpeg" >nul 2>&1
+"%PYTHON%" -c "import fastapi, uvicorn, faster_whisper, imageio_ffmpeg, truststore" >nul 2>&1
 if errorlevel 1 (
     echo [Setup] Installing Python dependencies. This may take several minutes...
     "%PYTHON%" -m pip install --disable-pip-version-check -r local_transcriber\requirements.txt

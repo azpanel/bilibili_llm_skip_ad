@@ -3,12 +3,20 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import socket
+import ssl
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
+
+import truststore
 
 ALLOWED_HOST_SUFFIXES = (".hdslb.com", ".bilivideo.cn", ".bilivideo.com", ".edge.mountaintoys.cn")
 MAX_AUDIO_BYTES = 1_024 * 1_024 * 1024
 MAX_REDIRECTS = 3
+
+
+def system_ssl_context() -> ssl.SSLContext:
+    """Create a TLS context backed by the operating system trust store."""
+    return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
 
 def _is_private_host(host: str) -> bool:
@@ -41,7 +49,11 @@ async def download_audio(url: str, target: Path, progress=None) -> int:
 
     current = url
     timeout = httpx.Timeout(30.0, connect=10.0)
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=False,
+        verify=system_ssl_context(),
+    ) as client:
         for _ in range(MAX_REDIRECTS + 1):
             validate_audio_url(current)
             headers = {
