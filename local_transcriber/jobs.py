@@ -145,7 +145,7 @@ class JobManager:
                 else:
                     raise RuntimeError("所有音频地址均下载失败：" + "；".join(errors))
                 ranges = self._ranges(job)
-                job.transcription_started_at = time.time()
+                job.transcription_started_at = time.monotonic()
                 all_segments = []
                 for index, selected_range in enumerate(ranges):
                     job.current_range = index
@@ -160,7 +160,9 @@ class JobManager:
                     if index < len(ranges) - 1:
                         job.status, job.message = "awaiting_continue", f"第 {index + 1}/{len(ranges)} 个范围识别完成，等待检查结果"
                         job.continue_event.clear()
+                        waiting_started_at = time.monotonic()
                         await job.continue_event.wait()
+                        job.transcription_started_at += time.monotonic() - waiting_started_at
                 job.status, job.message, job.progress = "completed", "识别完成", 100
                 self.completed_processing_seconds += time.time() - job.processing_started_at
                 self.completed_audio_seconds += self._audio_duration(job)
@@ -206,11 +208,11 @@ class JobManager:
             previous = job.progress
             job.transcription_seconds = prior_duration + seconds
             job.progress = min(69, 35 + int(job.transcription_seconds / selected_duration * 34)) if selected_duration else 35
-            if job.transcription_started_at and seconds > 0:
-                elapsed = max(0.001, time.time() - job.transcription_started_at)
+            elapsed = max(0, time.monotonic() - job.transcription_started_at) if job.transcription_started_at is not None else 0
+            if job.transcription_started_at is not None and seconds > 0:
                 job.transcription_eta = max(0, elapsed * (selected_duration / job.transcription_seconds - 1)) if job.transcription_seconds else None
             if job.progress != previous:
-                logger.info("任务 %s 识别进度 %d%%（已处理 %.0f 秒，ETA %.0f 秒）", job.id, job.progress, seconds, job.transcription_eta or 0)
+                logger.info("任务 %s 识别进度 %d%%（识别耗时 %.0f 秒，已处理音频 %.0f/%.0f 秒，ETA %s）", job.id, job.progress, elapsed, job.transcription_seconds, selected_duration, f"{job.transcription_eta:.0f} 秒" if job.transcription_eta is not None else "估算中")
         return update
 
     def transcription_details(self, job: Job) -> dict:
